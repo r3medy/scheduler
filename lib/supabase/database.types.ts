@@ -30,7 +30,9 @@ export interface Database {
           created_at?: string
           updated_at?: string
         }
-        Update: Partial<Database["public"]["Tables"]["auth_rate_limits"]["Insert"]>
+        Update: Partial<
+          Database["public"]["Tables"]["auth_rate_limits"]["Insert"]
+        >
         Relationships: []
       }
       callbacks: {
@@ -71,6 +73,46 @@ export interface Database {
         Update: Partial<Database["public"]["Tables"]["callbacks"]["Insert"]>
         Relationships: []
       }
+      callback_attempts: {
+        Row: {
+          id: string
+          callback_id: string
+          attempted_at: string
+          outcome: "voicemail" | "no_answer"
+          note: string | null
+          caused_rescheduling: boolean
+          prior_schedule_mode: "exact" | "window" | null
+          prior_scheduled_at: string | null
+          prior_window_start_at: string | null
+          prior_window_end_at: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          callback_id: string
+          attempted_at?: string
+          outcome: "voicemail" | "no_answer"
+          note?: string | null
+          caused_rescheduling: boolean
+          prior_schedule_mode?: "exact" | "window" | null
+          prior_scheduled_at?: string | null
+          prior_window_start_at?: string | null
+          prior_window_end_at?: string | null
+          created_at?: string
+        }
+        Update: Partial<
+          Database["public"]["Tables"]["callback_attempts"]["Insert"]
+        >
+        Relationships: [
+          {
+            foreignKeyName: "callback_attempts_callback_id_fkey"
+            columns: ["callback_id"]
+            isOneToOne: false
+            referencedRelation: "callbacks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: Record<never, never>
     Functions: {
@@ -108,6 +150,19 @@ export interface Database {
           p_key: string
         }
         Returns: undefined
+      }
+      record_callback_attempt: {
+        Args: {
+          p_callback_id: string
+          p_outcome: "voicemail" | "no_answer"
+          p_note: string | null
+          p_action: "close" | "reschedule"
+          p_schedule_mode: "exact" | "window" | null
+          p_scheduled_at: string | null
+          p_window_start_at: string | null
+          p_window_end_at: string | null
+        }
+        Returns: string
       }
     }
     Enums: Record<never, never>

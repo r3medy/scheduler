@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 
 const mocks = vi.hoisted(() => ({
   getUser: vi.fn(),
+  from: vi.fn(),
+  rpc: vi.fn(),
   insert: vi.fn(),
   or: vi.fn(),
   eq: vi.fn(),
@@ -9,17 +13,14 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   delete: vi.fn(),
   maybeSingle: vi.fn(),
+  order: vi.fn(),
 }))
 vi.mock("@/lib/supabase/server", () => ({
   getSupabaseConfiguration: () => ({}),
   createSupabaseServerClient: async () => ({
     auth: { getUser: mocks.getUser },
-    from: () => ({
-      insert: mocks.insert,
-      update: mocks.update,
-      delete: mocks.delete,
-      select: () => ({ eq: mocks.eq }),
-    }),
+    from: mocks.from,
+    rpc: mocks.rpc,
   }),
 }))
 import { createCallback, updateCallback } from "@/lib/callbacks/create-callback"
@@ -50,6 +51,19 @@ function input() {
   return data
 }
 
+const callbackId = "00000000-0000-4000-8000-000000000001"
+
+function attemptInput(
+  outcome: "voicemail" | "no_answer",
+  action: "close" | "reschedule"
+) {
+  const data = new FormData()
+  data.set("outcome", outcome)
+  data.set("attempt_action", action)
+  data.set("note", "Customer asked for another call")
+  return data
+}
+
 beforeEach(() => {
   vi.resetAllMocks()
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-05T08:00:00.000Z"))
@@ -59,21 +73,28 @@ beforeEach(() => {
   })
   mocks.insert.mockResolvedValue({ error: null })
   const query = {
+    insert: mocks.insert,
+    update: mocks.update,
+    delete: mocks.delete,
     eq: mocks.eq,
     neq: mocks.neq,
     or: mocks.or,
     select: () => query,
     maybeSingle: mocks.maybeSingle,
+    order: mocks.order,
   }
+  mocks.from.mockReturnValue(query)
   mocks.eq.mockReturnValue(query)
   mocks.neq.mockReturnValue(query)
   mocks.update.mockReturnValue(query)
   mocks.delete.mockReturnValue(query)
   mocks.maybeSingle.mockResolvedValue({
-    data: { id: "00000000-0000-4000-8000-000000000001" },
+    data: { id: callbackId },
     error: null,
   })
   mocks.or.mockResolvedValue({ count: 0, error: null })
+  mocks.order.mockResolvedValue({ data: [], error: null })
+  mocks.rpc.mockResolvedValue({ data: callbackId, error: null })
 })
 
 describe("callback creation", () => {
@@ -88,11 +109,11 @@ describe("callback creation", () => {
       const data = input()
       data.set(field, "x".repeat(limit + 1))
 
-    expect(await createCallback(data)).toMatchObject({
-      status: "error",
-      field,
-    })
-    expect(mocks.insert).not.toHaveBeenCalled()
+      expect(await createCallback(data)).toMatchObject({
+        status: "error",
+        field,
+      })
+      expect(mocks.insert).not.toHaveBeenCalled()
     }
   )
 
@@ -117,35 +138,103 @@ describe("callback creation", () => {
     )
   })
 
-  it.each(["reached", "voicemail", "no_answer"])(
-    "closes with %s as a separate final outcome",
-    async (outcome) => {
-      expect(await updateCallbackStatus("target", outcome)).toEqual({
-        status: "success",
-      })
-      expect(mocks.update).toHaveBeenCalledWith({
-        lifecycle_state: "closed",
-        resolution_outcome: outcome,
-        closed_at: expect.any(String),
-      })
-      expect(mocks.eq).toHaveBeenCalledWith("id", "target")
-      expect(mocks.eq).toHaveBeenCalledWith("user_id", "signed-in-owner")
-    }
-  )
-  it("clears closure fields when reopening and rejects derived statuses", async () => {
-    expect(await updateCallbackStatus("target", "open")).toEqual({
+  it("marks reached directly and scopes the update to the signed-in owner", async () => {
+    expect(await updateCallbackStatus(callbackId, "reached")).toEqual({
       status: "success",
     })
     expect(mocks.update).toHaveBeenCalledWith({
-      lifecycle_state: "open",
-      resolution_outcome: null,
-      closed_at: null,
+      lifecycle_state: "closed",
+      resolution_outcome: "reached",
+      closed_at: expect.any(String),
     })
-    mocks.update.mockClear()
-    expect(await updateCallbackStatus("target", "overdue")).toMatchObject({
+    expect(mocks.eq).toHaveBeenCalledWith("id", callbackId)
+    expect(mocks.eq).toHaveBeenCalledWith("user_id", "signed-in-owner")
+  })
+
+  it("requires a structured choice for unsuccessful outcomes", async () => {
+    expect(await updateCallbackStatus(callbackId, "voicemail")).toMatchObject({
       status: "error",
     })
     expect(mocks.update).not.toHaveBeenCalled()
+    expect(mocks.rpc).not.toHaveBeenCalled()
+  })
+
+  it("records a closing unsuccessful attempt without accepting schedule values", async () => {
+    const data = attemptInput("voicemail", "close")
+    data.set("schedule_mode", "exact")
+    data.set("scheduled_at", "2099-09-05T12:00:00.000Z")
+
+    expect(await updateCallbackStatus(callbackId, data)).toEqual({
+      status: "success",
+    })
+    expect(mocks.rpc).toHaveBeenCalledWith("record_callback_attempt", {
+      p_callback_id: callbackId,
+      p_outcome: "voicemail",
+      p_note: "Customer asked for another call",
+      p_action: "close",
+      p_schedule_mode: null,
+      p_scheduled_at: null,
+      p_window_start_at: null,
+      p_window_end_at: null,
+    })
+  })
+
+  it("reschedules an exact attempt on the same callback id", async () => {
+    const data = attemptInput("no_answer", "reschedule")
+    data.set("schedule_mode", "exact")
+    data.set("scheduled_at", "2026-09-05T09:00:00.000Z")
+
+    expect(await updateCallbackStatus(callbackId, data)).toEqual({
+      status: "success",
+    })
+    expect(mocks.rpc).toHaveBeenCalledWith(
+      "record_callback_attempt",
+      expect.objectContaining({
+        p_callback_id: callbackId,
+        p_outcome: "no_answer",
+        p_action: "reschedule",
+        p_schedule_mode: "exact",
+        p_scheduled_at: "2026-09-05T09:00:00.000Z",
+        p_window_start_at: null,
+        p_window_end_at: null,
+      })
+    )
+  })
+
+  it("reschedules a window with distinct start and end arguments", async () => {
+    const data = attemptInput("voicemail", "reschedule")
+    data.set("schedule_mode", "window")
+    data.set("window_start_at", "2026-09-05T09:00:00.000Z")
+    data.set("window_end_at", "2026-09-05T10:00:00.000Z")
+
+    expect(await updateCallbackStatus(callbackId, data)).toEqual({
+      status: "success",
+    })
+    expect(mocks.rpc).toHaveBeenCalledWith(
+      "record_callback_attempt",
+      expect.objectContaining({
+        p_callback_id: callbackId,
+        p_schedule_mode: "window",
+        p_scheduled_at: null,
+        p_window_start_at: "2026-09-05T09:00:00.000Z",
+        p_window_end_at: "2026-09-05T10:00:00.000Z",
+      })
+    )
+  })
+
+  it("does not claim an RPC failure succeeded", async () => {
+    mocks.rpc.mockResolvedValue({ data: null, error: { code: "42501" } })
+    expect(
+      await updateCallbackStatus(callbackId, attemptInput("no_answer", "close"))
+    ).toMatchObject({ status: "error" })
+  })
+
+  it("rejects anonymous attempt writes before calling the RPC", async () => {
+    mocks.getUser.mockResolvedValue({ data: { user: null }, error: null })
+    expect(
+      await updateCallbackStatus(callbackId, attemptInput("no_answer", "close"))
+    ).toMatchObject({ status: "error" })
+    expect(mocks.rpc).not.toHaveBeenCalled()
   })
   it("deletes only the signed-in owner's target and rejects anonymous or missing targets", async () => {
     expect(await deleteCallback("target")).toEqual({ status: "success" })
@@ -202,6 +291,11 @@ describe("callback creation", () => {
   it("loads details only for the authenticated owner", async () => {
     expect(await getCallback(id)).toMatchObject({ status: "success" })
     expect(mocks.eq).toHaveBeenCalledWith("user_id", "signed-in-owner")
+    expect(mocks.from).toHaveBeenCalledWith("callback_attempts")
+    expect(mocks.eq).toHaveBeenCalledWith("callback_id", id)
+    expect(mocks.order).toHaveBeenCalledWith("attempted_at", {
+      ascending: false,
+    })
     mocks.getUser.mockResolvedValue({ data: { user: null }, error: null })
     expect(await getCallback(id)).toMatchObject({ status: "error" })
   })
@@ -279,5 +373,65 @@ describe("callback presentation", () => {
     if (compact.length > 0) {
       expect(maskAccountNumber(value)).not.toContain(compact)
     }
+  })
+})
+
+describe("callback attempt migration", () => {
+  const migration = readFileSync(
+    resolve(
+      process.cwd(),
+      "supabase/migrations/20260905015000_callback_attempts.sql"
+    ),
+    "utf8"
+  )
+
+  it("keeps attempts owner-scoped, append-only, and parent-cascaded", () => {
+    expect(migration).toMatch(
+      /callback_id uuid not null references public\.callbacks \(id\) on delete cascade/i
+    )
+    expect(migration).toMatch(
+      /alter table public\.callback_attempts enable row level security/i
+    )
+    expect(migration).toMatch(/callbacks\.user_id = \(select auth\.uid\(\)\)/i)
+    expect(migration).toMatch(
+      /revoke all on table public\.callback_attempts from public, anon, authenticated/i
+    )
+    expect(migration).toMatch(
+      /grant select on table public\.callback_attempts to authenticated/i
+    )
+    expect(migration).not.toMatch(
+      /grant\s+(?:update|delete|[\s\S]*?update|[\s\S]*?delete)\s+on table public\.callback_attempts/i
+    )
+  })
+
+  it("uses the note domain and validates unsuccessful outcomes and snapshots", () => {
+    expect(migration).toMatch(/note public\.callback_attempt_note/i)
+    expect(migration).toMatch(/outcome in \('voicemail', 'no_answer'\)/i)
+    expect(migration).toMatch(/callback_attempts_valid_prior_schedule/i)
+    expect(migration).toMatch(
+      /caused_rescheduling\s+and prior_schedule_mode is not null/i
+    )
+    expect(migration).toMatch(/prior_window_end_at > prior_window_start_at/i)
+  })
+
+  it("locks an owned open callback and atomically inserts before updating the same id", () => {
+    expect(migration).toMatch(/security definer[\s\S]*set search_path = ''/i)
+    expect(migration).toMatch(
+      /callbacks\.user_id = v_user_id[\s\S]*callbacks\.lifecycle_state = 'open'[\s\S]*for update/i
+    )
+    expect(migration).toMatch(
+      /insert into public\.callback_attempts[\s\S]*v_callback\.schedule_mode[\s\S]*update public\.callbacks[\s\S]*where id = v_callback\.id/i
+    )
+    expect(migration).toMatch(/p_window_start_at > now\(\)/i)
+    expect(migration).toMatch(/p_scheduled_at > now\(\)/i)
+  })
+
+  it("exposes the RPC only to authenticated callers", () => {
+    expect(migration).toMatch(
+      /revoke all on function public\.record_callback_attempt\([\s\S]*?\) from public, anon, authenticated/i
+    )
+    expect(migration).toMatch(
+      /grant execute on function public\.record_callback_attempt\([\s\S]*?\) to authenticated/i
+    )
   })
 })

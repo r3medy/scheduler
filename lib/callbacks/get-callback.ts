@@ -1,34 +1,33 @@
 "use server"
 
-import {
-  createSupabaseServerClient,
-  getSupabaseConfiguration,
-} from "@/lib/supabase/server"
 import type { Database } from "@/lib/supabase/database.types"
+import { requireAuth } from "@/lib/callbacks/require-auth"
 
 export type CallbackRecord = Database["public"]["Tables"]["callbacks"]["Row"]
+export type CallbackAttemptRecord =
+  Database["public"]["Tables"]["callback_attempts"]["Row"]
 export type CallbackDetailResult =
-  | { status: "success"; callback: CallbackRecord }
+  | {
+      status: "success"
+      callback: CallbackRecord
+      attempts: CallbackAttemptRecord[]
+    }
   | { status: "error"; message: string }
 
 export async function getCallback(id: string): Promise<CallbackDetailResult> {
   try {
-    const configuration = getSupabaseConfiguration()
-    if (!configuration)
+    const gate = await requireAuth()
+    if (gate.status === "unavailable")
       return {
         status: "error",
         message: "Callbacks are unavailable. Please try again.",
       }
-    const supabase = await createSupabaseServerClient(configuration)
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-    if (authError || !user)
+    if (gate.status === "unauthenticated")
       return {
         status: "error",
         message: "Sign in again to view this callback.",
       }
+    const { supabase, user } = gate
     const { data, error } = await supabase
       .from("callbacks")
       .select("*")
@@ -41,7 +40,18 @@ export async function getCallback(id: string): Promise<CallbackDetailResult> {
         message:
           "Could not load this callback. It may have been deleted, or the connection is unavailable.",
       }
-    return { status: "success", callback: data }
+    const { data: attempts, error: attemptsError } = await supabase
+      .from("callback_attempts")
+      .select("*")
+      .eq("callback_id", id)
+      .order("attempted_at", { ascending: false })
+    if (attemptsError || !attempts)
+      return {
+        status: "error",
+        message:
+          "Could not load this callback's attempt history. Please try again.",
+      }
+    return { status: "success", callback: data, attempts }
   } catch {
     return {
       status: "error",

@@ -1,10 +1,22 @@
 "use client"
 
-import { useRef, useState, type ComponentProps, type RefObject } from "react"
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ComponentProps,
+  type FormEvent,
+  type RefObject,
+} from "react"
 import { IconX } from "@tabler/icons-react"
 import { useRouter } from "next/navigation"
 import { deleteCallback } from "@/lib/callbacks/delete-callback"
-import { CallbackStatusSelect } from "@/components/callbacks/callback-status-select"
+import { updateCallbackStatus } from "@/lib/callbacks/update-status"
+import { ATTEMPT_NOTE_MAX_LENGTH } from "@/lib/callbacks/limits"
+import { nextScheduleMinute } from "@/lib/callbacks/local-date"
+import { CallbackAttemptHistory } from "@/components/callbacks/callback-attempt-history"
+import { ScheduleDateTime } from "@/components/callbacks/schedule-date-time"
 import {
   getCallback,
   type CallbackDetailResult,
@@ -12,6 +24,9 @@ import {
 } from "@/lib/callbacks/get-callback"
 import { NewCallbackDialog } from "@/components/callbacks/new-callback-dialog"
 import { Button } from "@/components/ui/button"
+import { Field, FieldError, FieldLabel } from "@/components/ui/field"
+import { Textarea } from "@/components/ui/textarea"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   Dialog,
   DialogTrigger,
@@ -27,6 +42,361 @@ function formatCallbackDate(date: string) {
     timeStyle: "short",
     timeZone: "Africa/Cairo",
   })
+}
+
+type UnsuccessfulOutcome = "voicemail" | "no_answer"
+
+function CallbackOutcomeForm({
+  callback,
+  onSaved,
+}: {
+  callback: CallbackRecord
+  onSaved: () => void
+}) {
+  const id = useId()
+  const current =
+    callback.lifecycle_state === "open"
+      ? "open"
+      : (callback.resolution_outcome ?? "reached")
+  const [value, setValue] = useState(current)
+  const [attemptAction, setAttemptAction] = useState<"close" | "reschedule">(
+    "close"
+  )
+  const [mode, setMode] = useState<"exact" | "window">("exact")
+  const [note, setNote] = useState("")
+  const [minimum, setMinimum] = useState(nextScheduleMinute)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [errorField, setErrorField] = useState<string | null>(null)
+  const formRef = useRef<HTMLFormElement>(null)
+  const submitting = useRef(false)
+  const unsuccessful =
+    callback.lifecycle_state === "open" &&
+    (value === "voicemail" || value === "no_answer")
+
+  useEffect(() => {
+    if (!unsuccessful || attemptAction !== "reschedule") return
+    const timer = setInterval(() => setMinimum(nextScheduleMinute()), 1000)
+    return () => clearInterval(timer)
+  }, [attemptAction, unsuccessful])
+
+  function focusField(field?: string) {
+    if (!field) return
+    const scheduleField =
+      field === "scheduled_at" ||
+      field === "window_start_at" ||
+      field === "window_end_at"
+    const target = scheduleField
+      ? document.getElementById(`${id}-${field}`)
+      : formRef.current?.elements.namedItem(field)
+    if (target instanceof HTMLElement)
+      requestAnimationFrame(() => target.focus())
+  }
+
+  async function change(next: string) {
+    if (submitting.current || next === current) {
+      setValue(current)
+      return
+    }
+    setValue(next)
+    setError(null)
+    setErrorField(null)
+    if (next === "voicemail" || next === "no_answer") {
+      setAttemptAction("close")
+      return
+    }
+    if (next !== "open" && next !== "reached") return
+    submitting.current = true
+    setPending(true)
+    try {
+      const result = await updateCallbackStatus(callback.id, next)
+      if (result.status === "success") onSaved()
+      else {
+        setValue(current)
+        setError(result.message)
+      }
+    } catch {
+      setValue(current)
+      setError(
+        "Could not confirm the status change. Check your connection and reload."
+      )
+    } finally {
+      submitting.current = false
+      setPending(false)
+    }
+  }
+
+  async function submitAttempt(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (submitting.current || !unsuccessful) return
+    const data = new FormData(event.currentTarget)
+    data.set("outcome", value as UnsuccessfulOutcome)
+    data.set("attempt_action", attemptAction)
+    data.set("note", note)
+    if (attemptAction === "reschedule") {
+      data.set("schedule_mode", mode)
+      const fields =
+        mode === "exact"
+          ? ["scheduled_at"]
+          : ["window_start_at", "window_end_at"]
+      for (const field of fields) {
+        const date = new Date(String(data.get(field)))
+        if (!Number.isFinite(date.getTime()) || date.getTime() <= Date.now()) {
+          setError("Choose a future date and time.")
+          setErrorField(field)
+          focusField(field)
+          return
+        }
+        data.set(field, date.toISOString())
+      }
+      if (
+        mode === "window" &&
+        Date.parse(String(data.get("window_end_at"))) <=
+          Date.parse(String(data.get("window_start_at")))
+      ) {
+        setError("Window end must be later than window start.")
+        setErrorField("window_end_at")
+        focusField("window_end_at")
+        return
+      }
+    }
+    submitting.current = true
+    setPending(true)
+    setError(null)
+    setErrorField(null)
+    try {
+      const result = await updateCallbackStatus(callback.id, data)
+      if (result.status === "success") onSaved()
+      else {
+        setError(result.message)
+        setErrorField(result.field ?? null)
+        focusField(result.field)
+      }
+    } catch {
+      setError(
+        "Could not confirm the outcome. Check your connection and reload."
+      )
+    } finally {
+      submitting.current = false
+      setPending(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <label htmlFor={`${id}-status`} className="text-muted-foreground">
+        Status
+      </label>
+      <select
+        id={`${id}-status`}
+        value={value}
+        disabled={pending}
+        onChange={(event) => void change(event.target.value)}
+        aria-describedby={unsuccessful ? undefined : `${id}-feedback`}
+        className="h-10 w-full rounded-md border border-input bg-popover px-3 text-popover-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+      >
+        <option value="open">Open</option>
+        {callback.lifecycle_state === "open" ? (
+          <optgroup label="Record outcome">
+            <option value="reached">Completed — customer reached</option>
+            <option value="voicemail">Voicemail</option>
+            <option value="no_answer">No answer</option>
+          </optgroup>
+        ) : (
+          <option value={current} disabled>
+            Closed — {current === "no_answer" ? "no answer" : current}
+          </option>
+        )}
+      </select>
+      {!unsuccessful && (
+        <p
+          id={`${id}-feedback`}
+          role={error ? "alert" : "status"}
+          className={error ? "text-destructive" : "text-muted-foreground"}
+        >
+          {error ??
+            (pending
+              ? "Saving status…"
+              : callback.lifecycle_state === "open"
+                ? "Due and overdue states are calculated from the schedule."
+                : "Reopen the callback to make it actionable again.")}
+        </p>
+      )}
+      {unsuccessful && (
+        <form
+          ref={formRef}
+          onSubmit={submitAttempt}
+          aria-busy={pending}
+          className="mt-2 rounded-md border p-4"
+        >
+          <fieldset disabled={pending} className="flex flex-col gap-4">
+            <legend className="font-medium">
+              {value === "voicemail" ? "Voicemail" : "No answer"}
+            </legend>
+            <div
+              role="radiogroup"
+              aria-label="What should happen next?"
+              aria-describedby={
+                errorField === "attempt_action" ? `${id}-feedback` : undefined
+              }
+              className="grid gap-2 sm:grid-cols-2"
+            >
+              {(["close", "reschedule"] as const).map((choice) => (
+                <label
+                  key={choice}
+                  className="flex cursor-pointer items-start gap-2 rounded-md border p-3 has-checked:border-primary"
+                >
+                  <input
+                    type="radio"
+                    name="attempt_action"
+                    value={choice}
+                    checked={attemptAction === choice}
+                    onChange={() => {
+                      setAttemptAction(choice)
+                      setError(null)
+                      setErrorField(null)
+                      if (choice === "reschedule")
+                        setMinimum(nextScheduleMinute())
+                    }}
+                  />
+                  <span>
+                    <span className="block font-medium">
+                      {choice === "close" ? "Close" : "Reschedule"}
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {choice === "close"
+                        ? "Record the final outcome and close this callback."
+                        : "Keep this callback open with a new schedule."}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <Field data-invalid={errorField === "note"}>
+              <FieldLabel htmlFor={`${id}-note`}>
+                Attempt note (optional)
+              </FieldLabel>
+              <Textarea
+                id={`${id}-note`}
+                name="note"
+                value={note}
+                maxLength={ATTEMPT_NOTE_MAX_LENGTH}
+                aria-invalid={errorField === "note"}
+                aria-describedby={
+                  errorField === "note" ? `${id}-feedback` : undefined
+                }
+                onChange={(event) => {
+                  setNote(event.target.value)
+                  setError(null)
+                  setErrorField(null)
+                }}
+              />
+            </Field>
+            {attemptAction === "reschedule" && (
+              <>
+                <Field data-invalid={errorField === "schedule_mode"}>
+                  <FieldLabel id={`${id}-schedule-mode`}>
+                    New scheduling mode
+                  </FieldLabel>
+                  <ToggleGroup
+                    aria-labelledby={`${id}-schedule-mode`}
+                    aria-describedby={
+                      errorField === "schedule_mode"
+                        ? `${id}-feedback`
+                        : undefined
+                    }
+                    value={[mode]}
+                    onValueChange={(values) => {
+                      if (values[0] === "exact" || values[0] === "window") {
+                        setMode(values[0])
+                        setError(null)
+                        setErrorField(null)
+                      }
+                    }}
+                  >
+                    <ToggleGroupItem value="exact">Exact time</ToggleGroupItem>
+                    <ToggleGroupItem value="window">
+                      Time window
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </Field>
+                {mode === "exact" ? (
+                  <Field data-invalid={errorField === "scheduled_at"}>
+                    <FieldLabel htmlFor={`${id}-scheduled_at`}>
+                      New date and time
+                    </FieldLabel>
+                    <ScheduleDateTime
+                      id={`${id}-scheduled_at`}
+                      name="scheduled_at"
+                      label="New date and time"
+                      minimum={minimum}
+                      invalid={errorField === "scheduled_at"}
+                      describedBy={
+                        errorField === "scheduled_at"
+                          ? `${id}-feedback`
+                          : undefined
+                      }
+                      onChange={() => {
+                        setError(null)
+                        setErrorField(null)
+                      }}
+                    />
+                  </Field>
+                ) : (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {(["window_start_at", "window_end_at"] as const).map(
+                      (field) => {
+                        const label =
+                          field === "window_start_at"
+                            ? "New window start"
+                            : "New window end"
+                        return (
+                          <Field
+                            key={field}
+                            data-invalid={errorField === field}
+                          >
+                            <FieldLabel htmlFor={`${id}-${field}`}>
+                              {label}
+                            </FieldLabel>
+                            <ScheduleDateTime
+                              id={`${id}-${field}`}
+                              name={field}
+                              label={label}
+                              minimum={minimum}
+                              invalid={errorField === field}
+                              describedBy={
+                                errorField === field
+                                  ? `${id}-feedback`
+                                  : undefined
+                              }
+                              onChange={() => {
+                                setError(null)
+                                setErrorField(null)
+                              }}
+                            />
+                          </Field>
+                        )
+                      }
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+            {error && <FieldError id={`${id}-feedback`}>{error}</FieldError>}
+            <div className="flex justify-end">
+              <Button type="submit" disabled={pending} className="min-w-36">
+                {pending
+                  ? "Saving…"
+                  : attemptAction === "close"
+                    ? "Close callback"
+                    : "Record and reschedule"}
+              </Button>
+            </div>
+          </fieldset>
+        </form>
+      )}
+    </div>
+  )
 }
 
 function DetailsContent({
@@ -76,12 +446,13 @@ function DetailsContent({
         ))}
       </dl>
       <div className="mt-4">
-        <CallbackStatusSelect
+        <CallbackOutcomeForm
           key={`${callback.id}-${callback.updated_at}`}
           callback={callback}
           onSaved={onStatusSaved}
         />
       </div>
+      <CallbackAttemptHistory attempts={result.attempts} />
     </>
   )
 }

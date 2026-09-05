@@ -22,6 +22,8 @@ import {
   type HistoryResult,
 } from "@/lib/callbacks/presentation"
 
+export { CallbackAttemptHistory } from "@/components/callbacks/callback-attempt-history"
+
 const HISTORY_COUNT_KEYS: readonly (HistoryOutcome | "all")[] = [
   "all",
   ...(Object.keys(HISTORY_OUTCOMES) as HistoryOutcome[]),
