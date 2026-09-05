@@ -20,6 +20,8 @@
     --accent: oklch(0.967 0.001 286.375);
     --accent-foreground: oklch(0.21 0.006 285.885);
     --destructive: oklch(0.577 0.245 27.325);
+    --warning: #92400e;
+    --overdue: #b91c1c;
     --border: oklch(0.92 0.004 286.32);
     --input: oklch(0.92 0.004 286.32);
     --ring: oklch(0.705 0.015 286.067);
@@ -55,6 +57,8 @@
     --accent: oklch(0.274 0.006 286.033);
     --accent-foreground: oklch(0.985 0 0);
     --destructive: oklch(0.704 0.191 22.216);
+    --warning: #fcd34d;
+    --overdue: #fca5a5;
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.552 0.016 285.938);
@@ -93,6 +97,8 @@
     --color-input: var(--input);
     --color-border: var(--border);
     --color-destructive: var(--destructive);
+    --color-warning: var(--warning);
+    --color-overdue: var(--overdue);
     --color-accent-foreground: var(--accent-foreground);
     --color-accent: var(--accent);
     --color-muted-foreground: var(--muted-foreground);
@@ -130,3 +136,28 @@
     @apply font-sans;
     }
 }
+
+/* Upright silhouette traced from the supplied sculpted rail reference; surfaces follow the theme. */
+.app-rail { position: fixed; top: 50%; left: 0; width: 88px; height: min(460px, calc(100dvh - 24px)); transform: translateY(-50%); z-index: 20; color: var(--sidebar-foreground); }
+.rail-shape { position: absolute; inset: 0; width: 100%; height: 100%; fill: var(--sidebar); stroke: var(--sidebar-border); }
+.rail-links { position: relative; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 24px; padding: 58px 8px 58px 16px; }
+.rail-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; width: 64px; flex-shrink: 0; border-radius: 12px; padding: 4px; font-size: 12px; line-height: 16px; color: var(--muted-foreground); outline-offset: 3px; transition: color 120ms; }
+.rail-icon { display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid var(--sidebar-border); border-radius: 50%; transition: border-color 120ms, background 120ms; }
+.rail-icon svg { width: 22px; height: 22px; }
+.rail-item:hover, .rail-item[aria-current="page"] { color: var(--sidebar-foreground); }
+.rail-item:hover .rail-icon { background: var(--sidebar-accent); }
+.rail-item[aria-current="page"] .rail-icon { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+.rail-item:focus-visible { outline: 2px solid var(--primary); }
+.rail-divider[data-slot="separator"] { width: 40px; background: var(--sidebar-border); }
+.app-content { margin-left: 96px; min-width: 0; }
+@media (max-width: 700px) {
+  .app-rail { width: 72px; }
+  .rail-links { padding-inline: 8px 4px; }
+  .rail-item { width: 56px; }
+  .app-content { margin-left: 80px; }
+}
+@media (max-height: 480px) {
+  .rail-links { gap: 10px; padding-block: 28px; }
+  .rail-icon { width: 36px; height: 36px; }
+}
+@media (prefers-reduced-motion: reduce) { .rail-item, .rail-icon { transition: none; } }

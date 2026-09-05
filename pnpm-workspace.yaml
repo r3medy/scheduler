@@ -1,6 +1,13 @@
 packages: []
 
+overrides:
+  undici-types: 6.28.0
+  eslint-import-resolver-typescript: 4.4.5
+  "@babel/core": 7.29.0
+  semver: 7.7.3
+
 allowBuilds:
   sharp: true
   unrs-resolver: true
   msw: false
+  esbuild: true

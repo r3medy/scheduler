@@ -1,5 +1,6 @@
 # dependencies
 /node_modules
+/.pnpm-store/
 /.pnp
 .pnp.*
 .yarn/*
@@ -17,10 +18,23 @@
 
 # production
 /build
+/dist/
+
+# generated and hosting state
+/graphify-out/
+/artifacts/
+/.vercel/
+/test-results/
+/playwright-report/
+/.agents/
+/.fallow/
+/browserbase/
 
 # misc
 .DS_Store
 *.pem
+Thumbs.db
+Desktop.ini
 
 # debug
 npm-debug.log*
@@ -28,8 +42,9 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files (keep the documented template)
 .env*
+!.env.example
 
 # typescript
 *.tsbuildinfo
