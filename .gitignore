@@ -28,10 +28,7 @@
 /playwright-report/
 /.agents/
 /.fallow/
-/browserbase/node_modules/
-/browserbase/artifacts/
-/browserbase/.env*
-!/browserbase/.env.example
+/browserbase/
 
 # misc
 .DS_Store
