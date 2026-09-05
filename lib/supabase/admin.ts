@@ -2,19 +2,26 @@ import "server-only"
 
 import { createClient } from "@supabase/supabase-js"
 
+import {
+  getSupabaseAdminConfiguration,
+  type SupabaseAdminConfiguration,
+} from "@/lib/config/runtime"
 import type { Database } from "@/lib/supabase/database.types"
 
-export function createSupabaseAdminClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+export function createSupabaseAdminClient(
+  configuration: SupabaseAdminConfiguration | null = getSupabaseAdminConfiguration()
+) {
+  if (!configuration) return null
 
-  if (!url || !serviceRoleKey) return null
-
-  return createClient<Database>(url, serviceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-      persistSession: false,
-    },
-  })
+  return createClient<Database>(
+    configuration.url,
+    configuration.serviceRoleKey,
+    {
+      auth: {
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+        persistSession: false,
+      },
+    }
+  )
 }

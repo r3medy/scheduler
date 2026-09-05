@@ -56,7 +56,13 @@ beforeEach(() => {
                 error: null,
               }
             : {
-                count: query.filters.resolution_outcome ? 30 : 90,
+                count: query.filters.resolution_outcome
+                  ? {
+                      reached: 37,
+                      voicemail: 22,
+                      no_answer: 7,
+                    }[query.filters.resolution_outcome]
+                  : 66,
                 error: state.error ? { message: "failure" } : null,
               }
         ),
@@ -69,14 +75,21 @@ it("scopes all queries to the verified owner and excludes full account numbers f
   expect(result.status).toBe("success")
   if (result.status !== "success") return
   expect(result.counts).toEqual({
-    all: 90,
-    reached: 30,
-    voicemail: 30,
-    no_answer: 30,
+    all: 66,
+    reached: 37,
+    voicemail: 22,
+    no_answer: 7,
   })
   expect(result.rows[0].accountReference).toBe("•••• 6789")
   expect(result.rows[0]).not.toHaveProperty("account_number")
   expect(state.queries).toHaveLength(5)
+  expect(
+    state.queries
+      .slice(0, 4)
+      .map((query) => query.filters.resolution_outcome ?? "all")
+  ).toEqual(
+    expect.arrayContaining(["all", "reached", "voicemail", "no_answer"])
+  )
   for (const query of state.queries)
     expect(query.filters).toMatchObject({
       user_id: "owner",
@@ -85,7 +98,7 @@ it("scopes all queries to the verified owner and excludes full account numbers f
 })
 it("filters and clamps pagination to surviving records", async () => {
   const result = await getHistory(500, "reached")
-  expect(result).toMatchObject({ status: "success", page: 2, total: 30 })
+  expect(result).toMatchObject({ status: "success", page: 2, total: 37 })
   expect(state.queries.at(-1)).toMatchObject({
     filters: { resolution_outcome: "reached" },
     range: [25, 49],

@@ -39,10 +39,7 @@ import {
 } from "@/lib/auth/rate-limit"
 import { getRuntimeConfiguration } from "@/lib/config/runtime"
 import { createSupabaseAdminClient } from "@/lib/supabase/admin"
-import {
-  createSupabaseServerClient,
-  getSupabaseConfiguration,
-} from "@/lib/supabase/server"
+import { createSupabaseServerClient } from "@/lib/supabase/server"
 
 interface AuthAdapter {
   signInWithPassword(credentials: {
@@ -285,9 +282,17 @@ export async function authenticateRegistration(
 
 async function getAuthDependencies(): Promise<AuthDependencies | null> {
   const runtimeConfiguration = getRuntimeConfiguration()
-  const configuration = getSupabaseConfiguration()
-  const admin = createSupabaseAdminClient()
-  if (!runtimeConfiguration || !configuration || !admin) return null
+  if (!runtimeConfiguration) return null
+
+  const configuration = {
+    url: runtimeConfiguration.supabaseUrl,
+    publishableKey: runtimeConfiguration.supabasePublishableKey,
+  }
+  const admin = createSupabaseAdminClient({
+    url: runtimeConfiguration.supabaseUrl,
+    serviceRoleKey: runtimeConfiguration.supabaseServiceRoleKey,
+  })
+  if (!admin) return null
 
   const rateLimitConfiguration = getRateLimitConfiguration()
   const [clientSource, supabase] = await Promise.all([

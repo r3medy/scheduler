@@ -1,35 +1,39 @@
 import { createServerClient } from "@supabase/ssr"
 import { type NextRequest, NextResponse } from "next/server"
 
+import { getPublicSupabaseConfiguration } from "@/lib/config/runtime"
 import type { Database } from "@/lib/supabase/database.types"
 
 export async function proxy(request: NextRequest) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+  const configuration = getPublicSupabaseConfiguration()
 
-  if (!url || !publishableKey) {
+  if (!configuration) {
     return NextResponse.next({ request })
   }
 
   let response = NextResponse.next({ request })
-  const supabase = createServerClient<Database>(url, publishableKey, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll()
-      },
-      setAll(cookiesToSet) {
-        for (const { name, value } of cookiesToSet) {
-          request.cookies.set(name, value)
-        }
+  const supabase = createServerClient<Database>(
+    configuration.url,
+    configuration.publishableKey,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll()
+        },
+        setAll(cookiesToSet) {
+          for (const { name, value } of cookiesToSet) {
+            request.cookies.set(name, value)
+          }
 
-        response = NextResponse.next({ request })
+          response = NextResponse.next({ request })
 
-        for (const { name, value, options } of cookiesToSet) {
-          response.cookies.set(name, value, options)
-        }
+          for (const { name, value, options } of cookiesToSet) {
+            response.cookies.set(name, value, options)
+          }
+        },
       },
-    },
-  })
+    }
+  )
 
   await supabase.auth.getClaims()
 

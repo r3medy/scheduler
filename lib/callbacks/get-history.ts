@@ -33,19 +33,24 @@ export async function getHistory(
         .select("id", { count: "exact", head: true })
         .eq("user_id", user.id)
         .eq("lifecycle_state", "closed")
-    const totals = await Promise.all([
-      base(),
-      ...(Object.keys(HISTORY_OUTCOMES) as HistoryOutcome[]).map((key) =>
-        base().eq("resolution_outcome", key)
-      ),
-    ])
-    if (totals.some((result) => result.error)) return { status: "error" }
-    const counts = {
-      all: totals[0].count ?? 0,
-      reached: totals[1].count ?? 0,
-      voicemail: totals[2].count ?? 0,
-      no_answer: totals[3].count ?? 0,
+    const countFor = async (key: HistoryOutcome | "all") => {
+      const query = base()
+      const result = await (key === "all"
+        ? query
+        : query.eq("resolution_outcome", key))
+      return { key, result }
     }
+    const totals = await Promise.all(
+      (
+        ["all", ...Object.keys(HISTORY_OUTCOMES)] as Array<
+          HistoryOutcome | "all"
+        >
+      ).map(countFor)
+    )
+    if (totals.some(({ result }) => result.error)) return { status: "error" }
+    const counts = Object.fromEntries(
+      totals.map(({ key, result }) => [key, result.count ?? 0])
+    ) as Record<HistoryOutcome | "all", number>
     const total = counts[outcome ?? "all"]
     page = Math.min(page, Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE)))
     let query = supabase

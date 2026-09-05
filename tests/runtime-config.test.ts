@@ -6,6 +6,7 @@ import {
   assertRuntimeConfiguration,
   getPublicSupabaseConfiguration,
   getRuntimeConfiguration,
+  getSupabaseAdminConfiguration,
   reportRuntimeConfiguration,
   validateRuntimeConfiguration,
 } from "@/lib/config/runtime"
@@ -103,6 +104,31 @@ describe("runtime configuration", () => {
       publishableKey: validEnvironment.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
     })
     expect(getRuntimeConfiguration(environment)).toBeNull()
+  })
+
+  it("normalizes public and privileged Supabase credentials", () => {
+    const environment = {
+      ...validEnvironment,
+      NEXT_PUBLIC_SUPABASE_URL: "  https://project.supabase.co/path  ",
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "  publishable-key  ",
+      SUPABASE_SERVICE_ROLE_KEY: "  service-role-secret  ",
+      AUTH_RATE_LIMIT_SECRET: `  ${"a".repeat(32)}  `,
+    }
+
+    expect(getPublicSupabaseConfiguration(environment)).toEqual({
+      url: "https://project.supabase.co/path",
+      publishableKey: "publishable-key",
+    })
+    expect(getSupabaseAdminConfiguration(environment)).toEqual({
+      url: "https://project.supabase.co/path",
+      serviceRoleKey: "service-role-secret",
+    })
+    expect(getRuntimeConfiguration(environment)).toEqual({
+      supabaseUrl: "https://project.supabase.co/path",
+      supabasePublishableKey: "publishable-key",
+      supabaseServiceRoleKey: "service-role-secret",
+      authRateLimitSecret: "a".repeat(32),
+    })
   })
 
   it("reports production failures using variable names only", () => {

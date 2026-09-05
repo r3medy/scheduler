@@ -19,6 +19,11 @@ export interface RuntimeConfiguration {
   authRateLimitSecret: string
 }
 
+export interface SupabaseAdminConfiguration {
+  url: string
+  serviceRoleKey: string
+}
+
 export interface RuntimeConfigurationIssue {
   variable: RuntimeVariable
   reason: "missing" | "invalid"
@@ -96,6 +101,17 @@ export function getPublicSupabaseConfiguration(
   if (!url || !publishableKey || !isSupabaseUrl(url)) return null
 
   return { url, publishableKey }
+}
+
+export function getSupabaseAdminConfiguration(
+  env: Record<string, string | undefined> = process.env
+): SupabaseAdminConfiguration | null {
+  const url = nonEmpty(env[RUNTIME_VARIABLES.supabaseUrl])
+  const serviceRoleKey = nonEmpty(env[RUNTIME_VARIABLES.supabaseServiceRoleKey])
+
+  if (!url || !serviceRoleKey || !isSupabaseUrl(url)) return null
+
+  return { url, serviceRoleKey }
 }
 
 export function validateRuntimeConfiguration(
