@@ -1,5 +1,6 @@
 import { Figtree, Geist_Mono, Lora } from "next/font/google"
 import type { Metadata } from "next"
+import { Analytics } from "@vercel/analytics/next"
 
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
@@ -63,6 +64,7 @@ export default function RootLayout({
           </TooltipProvider>
         </ThemeProvider>
         <MobileGatekeeper />
+        <Analytics />
       </body>
     </html>
   )
