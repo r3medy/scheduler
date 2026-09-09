@@ -1,11 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { readFileSync } from "node:fs"
-import { resolve } from "node:path"
 
 const mocks = vi.hoisted(() => ({
   getUser: vi.fn(),
   from: vi.fn(),
-  rpc: vi.fn(),
   insert: vi.fn(),
   or: vi.fn(),
   eq: vi.fn(),
@@ -20,7 +17,6 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServerClient: async () => ({
     auth: { getUser: mocks.getUser },
     from: mocks.from,
-    rpc: mocks.rpc,
   }),
 }))
 import { createCallback, updateCallback } from "@/lib/callbacks/create-callback"
@@ -31,10 +27,8 @@ import { maskAccountNumber } from "@/lib/callbacks/presentation"
 import {
   ACCOUNT_HOLDER_NAME_MAX_LENGTH,
   ACCOUNT_NUMBER_MAX_LENGTH,
-  ATTEMPT_NOTE_MAX_LENGTH,
   COMMENTS_MAX_LENGTH,
   PHONE_NUMBER_MAX_LENGTH,
-  attemptNoteSchema,
 } from "@/lib/callbacks/validation"
 
 function input() {
@@ -60,7 +54,6 @@ function attemptInput(
   const data = new FormData()
   data.set("outcome", outcome)
   data.set("attempt_action", action)
-  data.set("note", "Customer asked for another call")
   return data
 }
 
@@ -94,7 +87,6 @@ beforeEach(() => {
   })
   mocks.or.mockResolvedValue({ count: 0, error: null })
   mocks.order.mockResolvedValue({ data: [], error: null })
-  mocks.rpc.mockResolvedValue({ data: callbackId, error: null })
 })
 
 describe("callback creation", () => {
@@ -116,13 +108,6 @@ describe("callback creation", () => {
       expect(mocks.insert).not.toHaveBeenCalled()
     }
   )
-
-  it("rejects an oversized attempt note at its validation boundary", () => {
-    expect(
-      attemptNoteSchema.safeParse("x".repeat(ATTEMPT_NOTE_MAX_LENGTH + 1))
-        .success
-    ).toBe(false)
-  })
 
   it("keeps phone and account formats permissive while trimming boundaries", async () => {
     const data = input()
@@ -156,10 +141,9 @@ describe("callback creation", () => {
       status: "error",
     })
     expect(mocks.update).not.toHaveBeenCalled()
-    expect(mocks.rpc).not.toHaveBeenCalled()
   })
 
-  it("records a closing unsuccessful attempt without accepting schedule values", async () => {
+  it("closes an unsuccessful outcome by overwriting the resolution fields", async () => {
     const data = attemptInput("voicemail", "close")
     data.set("schedule_mode", "exact")
     data.set("scheduled_at", "2099-09-05T12:00:00.000Z")
@@ -167,19 +151,16 @@ describe("callback creation", () => {
     expect(await updateCallbackStatus(callbackId, data)).toEqual({
       status: "success",
     })
-    expect(mocks.rpc).toHaveBeenCalledWith("record_callback_attempt", {
-      p_callback_id: callbackId,
-      p_outcome: "voicemail",
-      p_note: "Customer asked for another call",
-      p_action: "close",
-      p_schedule_mode: null,
-      p_scheduled_at: null,
-      p_window_start_at: null,
-      p_window_end_at: null,
+    expect(mocks.update).toHaveBeenCalledWith({
+      lifecycle_state: "closed",
+      resolution_outcome: "voicemail",
+      closed_at: expect.any(String),
     })
+    expect(mocks.eq).toHaveBeenCalledWith("id", callbackId)
+    expect(mocks.eq).toHaveBeenCalledWith("user_id", "signed-in-owner")
   })
 
-  it("reschedules an exact attempt on the same callback id", async () => {
+  it("reschedules an exact outcome on the same callback id", async () => {
     const data = attemptInput("no_answer", "reschedule")
     data.set("schedule_mode", "exact")
     data.set("scheduled_at", "2026-09-05T09:00:00.000Z")
@@ -187,21 +168,20 @@ describe("callback creation", () => {
     expect(await updateCallbackStatus(callbackId, data)).toEqual({
       status: "success",
     })
-    expect(mocks.rpc).toHaveBeenCalledWith(
-      "record_callback_attempt",
-      expect.objectContaining({
-        p_callback_id: callbackId,
-        p_outcome: "no_answer",
-        p_action: "reschedule",
-        p_schedule_mode: "exact",
-        p_scheduled_at: "2026-09-05T09:00:00.000Z",
-        p_window_start_at: null,
-        p_window_end_at: null,
-      })
-    )
+    expect(mocks.update).toHaveBeenCalledWith({
+      schedule_mode: "exact",
+      scheduled_at: "2026-09-05T09:00:00.000Z",
+      window_start_at: null,
+      window_end_at: null,
+      lifecycle_state: "open",
+      resolution_outcome: null,
+      closed_at: null,
+    })
+    expect(mocks.eq).toHaveBeenCalledWith("id", callbackId)
+    expect(mocks.eq).toHaveBeenCalledWith("user_id", "signed-in-owner")
   })
 
-  it("reschedules a window with distinct start and end arguments", async () => {
+  it("reschedules a window with distinct start and end values", async () => {
     const data = attemptInput("voicemail", "reschedule")
     data.set("schedule_mode", "window")
     data.set("window_start_at", "2026-09-05T09:00:00.000Z")
@@ -210,31 +190,33 @@ describe("callback creation", () => {
     expect(await updateCallbackStatus(callbackId, data)).toEqual({
       status: "success",
     })
-    expect(mocks.rpc).toHaveBeenCalledWith(
-      "record_callback_attempt",
-      expect.objectContaining({
-        p_callback_id: callbackId,
-        p_schedule_mode: "window",
-        p_scheduled_at: null,
-        p_window_start_at: "2026-09-05T09:00:00.000Z",
-        p_window_end_at: "2026-09-05T10:00:00.000Z",
-      })
-    )
+    expect(mocks.update).toHaveBeenCalledWith({
+      schedule_mode: "window",
+      scheduled_at: null,
+      window_start_at: "2026-09-05T09:00:00.000Z",
+      window_end_at: "2026-09-05T10:00:00.000Z",
+      lifecycle_state: "open",
+      resolution_outcome: null,
+      closed_at: null,
+    })
   })
 
-  it("does not claim an RPC failure succeeded", async () => {
-    mocks.rpc.mockResolvedValue({ data: null, error: { code: "42501" } })
+  it("does not report failed outcome persistence as success", async () => {
+    mocks.maybeSingle.mockResolvedValueOnce({
+      data: null,
+      error: { code: "42501" },
+    })
     expect(
       await updateCallbackStatus(callbackId, attemptInput("no_answer", "close"))
     ).toMatchObject({ status: "error" })
   })
 
-  it("rejects anonymous attempt writes before calling the RPC", async () => {
+  it("rejects anonymous outcome writes before touching the database", async () => {
     mocks.getUser.mockResolvedValue({ data: { user: null }, error: null })
     expect(
       await updateCallbackStatus(callbackId, attemptInput("no_answer", "close"))
     ).toMatchObject({ status: "error" })
-    expect(mocks.rpc).not.toHaveBeenCalled()
+    expect(mocks.update).not.toHaveBeenCalled()
   })
   it("deletes only the signed-in owner's target and rejects anonymous or missing targets", async () => {
     expect(await deleteCallback("target")).toEqual({ status: "success" })
@@ -291,11 +273,6 @@ describe("callback creation", () => {
   it("loads details only for the authenticated owner", async () => {
     expect(await getCallback(id)).toMatchObject({ status: "success" })
     expect(mocks.eq).toHaveBeenCalledWith("user_id", "signed-in-owner")
-    expect(mocks.from).toHaveBeenCalledWith("callback_attempts")
-    expect(mocks.eq).toHaveBeenCalledWith("callback_id", id)
-    expect(mocks.order).toHaveBeenCalledWith("attempted_at", {
-      ascending: false,
-    })
     mocks.getUser.mockResolvedValue({ data: { user: null }, error: null })
     expect(await getCallback(id)).toMatchObject({ status: "error" })
   })
@@ -373,65 +350,5 @@ describe("callback presentation", () => {
     if (compact.length > 0) {
       expect(maskAccountNumber(value)).not.toContain(compact)
     }
-  })
-})
-
-describe("callback attempt migration", () => {
-  const migration = readFileSync(
-    resolve(
-      process.cwd(),
-      "supabase/migrations/20260905015000_callback_attempts.sql"
-    ),
-    "utf8"
-  )
-
-  it("keeps attempts owner-scoped, append-only, and parent-cascaded", () => {
-    expect(migration).toMatch(
-      /callback_id uuid not null references public\.callbacks \(id\) on delete cascade/i
-    )
-    expect(migration).toMatch(
-      /alter table public\.callback_attempts enable row level security/i
-    )
-    expect(migration).toMatch(/callbacks\.user_id = \(select auth\.uid\(\)\)/i)
-    expect(migration).toMatch(
-      /revoke all on table public\.callback_attempts from public, anon, authenticated/i
-    )
-    expect(migration).toMatch(
-      /grant select on table public\.callback_attempts to authenticated/i
-    )
-    expect(migration).not.toMatch(
-      /grant\s+(?:update|delete|[\s\S]*?update|[\s\S]*?delete)\s+on table public\.callback_attempts/i
-    )
-  })
-
-  it("uses the note domain and validates unsuccessful outcomes and snapshots", () => {
-    expect(migration).toMatch(/note public\.callback_attempt_note/i)
-    expect(migration).toMatch(/outcome in \('voicemail', 'no_answer'\)/i)
-    expect(migration).toMatch(/callback_attempts_valid_prior_schedule/i)
-    expect(migration).toMatch(
-      /caused_rescheduling\s+and prior_schedule_mode is not null/i
-    )
-    expect(migration).toMatch(/prior_window_end_at > prior_window_start_at/i)
-  })
-
-  it("locks an owned open callback and atomically inserts before updating the same id", () => {
-    expect(migration).toMatch(/security definer[\s\S]*set search_path = ''/i)
-    expect(migration).toMatch(
-      /callbacks\.user_id = v_user_id[\s\S]*callbacks\.lifecycle_state = 'open'[\s\S]*for update/i
-    )
-    expect(migration).toMatch(
-      /insert into public\.callback_attempts[\s\S]*v_callback\.schedule_mode[\s\S]*update public\.callbacks[\s\S]*where id = v_callback\.id/i
-    )
-    expect(migration).toMatch(/p_window_start_at > now\(\)/i)
-    expect(migration).toMatch(/p_scheduled_at > now\(\)/i)
-  })
-
-  it("exposes the RPC only to authenticated callers", () => {
-    expect(migration).toMatch(
-      /revoke all on function public\.record_callback_attempt\([\s\S]*?\) from public, anon, authenticated/i
-    )
-    expect(migration).toMatch(
-      /grant execute on function public\.record_callback_attempt\([\s\S]*?\) to authenticated/i
-    )
   })
 })

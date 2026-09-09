@@ -45,7 +45,7 @@ export function ScheduleDateTime({
         className="w-full justify-start"
         aria-expanded={open}
         aria-controls={`${id}-calendar`}
-        aria-label={`${label}: ${selected ? selected.toLocaleDateString("en-US", { timeZone: "Africa/Cairo" }) : "Choose date"}`}
+        aria-label={`${label}: ${selected ? selected.toLocaleDateString("en-US") : "Choose date"}`}
         aria-invalid={invalid}
         aria-describedby={describedBy}
         onClick={() => setOpen(!open)}
@@ -56,7 +56,6 @@ export function ScheduleDateTime({
               month: "short",
               day: "numeric",
               year: "numeric",
-              timeZone: "Africa/Cairo",
             })
           : "Choose date"}
       </Button>

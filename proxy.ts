@@ -1,13 +1,29 @@
 import { createServerClient } from "@supabase/ssr"
 import { type NextRequest, NextResponse } from "next/server"
 
-import { getPublicSupabaseConfiguration } from "@/lib/config/runtime"
+import {
+  getPublicSupabaseConfiguration,
+  reportRuntimeConfiguration,
+} from "@/lib/config/runtime"
 import type { Database } from "@/lib/supabase/database.types"
+
+let reportedMissingConfiguration = false
 
 export async function proxy(request: NextRequest) {
   const configuration = getPublicSupabaseConfiguration()
 
   if (!configuration) {
+    // Intentional pass-through: public routes and the configuration-error UI
+    // must still render when Supabase settings are missing. Report through
+    // the shared startup validation so operators notice a broken release
+    // instead of silently serving an unauthenticated shell.
+    reportRuntimeConfiguration()
+    if (!reportedMissingConfiguration) {
+      reportedMissingConfiguration = true
+      console.warn(
+        "[proxy] Supabase configuration missing; continuing without session refresh."
+      )
+    }
     return NextResponse.next({ request })
   }
 

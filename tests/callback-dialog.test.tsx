@@ -9,14 +9,14 @@ vi.mock("@/lib/callbacks/create-callback", () => ({
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: mocks.refresh }),
 }))
-import { CallbacksSection } from "@/components/callbacks/callbacks-section"
+import { WorkloadSummary } from "@/components/callbacks/workload-summary"
 import { chooseSchedule } from "./date-picker-helper"
 
 beforeEach(() => vi.resetAllMocks())
 
 async function openForm() {
   const user = userEvent.setup()
-  render(<CallbacksSection view="week" visibleCount={0} />)
+  render(<WorkloadSummary open={[]} closedAts={[]} />)
   await user.click(screen.getByRole("button", { name: "New Callback" }))
   return user
 }
@@ -49,7 +49,7 @@ describe("New Callback modal", () => {
     await user.click(screen.getByRole("button", { name: "Save callback" }))
     expect(mocks.create).not.toHaveBeenCalled()
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Choose a future date and time"
+      "Enter a valid date and time"
     )
   })
   it("opens in place and restores focus after Escape", async () => {
@@ -134,14 +134,33 @@ describe("New Callback modal", () => {
     ).toBeDisabled()
   })
 
-  it("keeps creation available in populated periods", () => {
-    render(<CallbacksSection view="month" visibleCount={3} />)
+  it("keeps creation available from the workload section", () => {
+    render(<WorkloadSummary open={[]} closedAts={[]} />)
     expect(
       screen.getByRole("button", { name: "New Callback" })
     ).toBeInTheDocument()
     expect(
-      screen.getByText("3 callbacks scheduled in this month.")
+      screen.getByRole("heading", { name: "Today's workload" })
     ).toBeInTheDocument()
+  })
+
+  it("surfaces unavailable workload data without fabricating zero counts", () => {
+    render(
+      <WorkloadSummary
+        open={[]}
+        closedAts={[]}
+        unavailable
+        retryHref="/?view=week&date=2026-09-05"
+      />
+    )
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Workload summary is unavailable"
+    )
+    expect(screen.getByRole("link", { name: "Try again" })).toHaveAttribute(
+      "href",
+      "/?view=week&date=2026-09-05"
+    )
+    expect(screen.queryByText("0")).not.toBeInTheDocument()
   })
 
   it("lets the agent save after an overlap warning", async () => {

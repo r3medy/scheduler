@@ -1649,7 +1649,7 @@ The following invariants must remain true throughout design and implementation:
 18. There are no more than four primary authenticated application pages.
 19. Mark completed means the customer was reached.
 20. Voicemail and No answer allow close or reschedule.
-21. Rescheduling preserves compact attempt history on the same callback.
+21. ~~Rescheduling preserves compact attempt history on the same callback.~~ Cut per owner decision (September 2026): attempt history storage removed; outcomes overwrite the callback's resolution fields.
 22. Agents may edit or permanently delete their callbacks at any time.
 23. Deleted records no longer contribute to workload or history reporting.
 24. Notifications are generic, contain no PII, and do not repeat for the same schedule occurrence.
@@ -1664,3 +1664,11 @@ The following invariants must remain true throughout design and implementation:
 33. Narrow desktop browser windows remain supported.
 34. Workload summaries are agent-reported organizational aids, not performance or compliance evidence.
 35. The product must not resemble or introduce a Kanban board.
+
+---
+
+## September 6 implementation note — branding/metadata/CI scope
+
+- Added: favicon set (`public/favicon.ico` 16/32/48, `public/icon.png` 512, `public/apple-icon.png` 180), route titles/descriptions for login, register, Home, and history, `robots` noindex on private routes (`/` and `/history`; directives are not access control, private records stay out of sitemaps), and generic not-found/error/global-error experiences with safe recovery copy.
+- Added: `.github/workflows/ci.yml` (frozen-lockfile install, `format:check`, lint, typecheck, `vitest run`, build) and `format:check` script.
+- Still deferred per PRE-PROD.md §§7/10: canonical site URL and branded social-preview metadata (only for intentionally shareable public pages), sitemap/manifest (not required for a private app), production font-loading review for the three Google families, and `proxy.ts`/provider security headers pending the hosting decision.

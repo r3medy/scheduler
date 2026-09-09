@@ -1,4 +1,5 @@
 import Link from "next/link"
+import type { Metadata } from "next"
 import { AppShell } from "@/components/app-shell"
 import {
   IconAlertTriangle,
@@ -7,6 +8,7 @@ import {
 } from "@tabler/icons-react"
 
 import { CallbackWorkspace } from "@/components/callbacks/callback-workspace"
+import { WorkloadSummary } from "@/components/callbacks/workload-summary"
 import { buttonVariants } from "@/components/ui/button-variants"
 import {
   Empty,
@@ -16,7 +18,13 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { getCalendarCallbacks } from "@/lib/callbacks/get-calendar-callbacks"
+import {
+  getCalendarCallbacks,
+  getOverdueCallbacks,
+} from "@/lib/callbacks/get-calendar-callbacks"
+import { getWorkloadSummary } from "@/lib/callbacks/get-workload-summary"
+import { getOpenNotificationSchedules } from "@/lib/notifications/get-open-notification-schedules"
+import { requireAuth } from "@/lib/callbacks/require-auth"
 import {
   getCalendarRange,
   normalizeCalendarView,
@@ -29,6 +37,16 @@ interface PageProps {
     date?: string | string[]
     view?: string | string[]
   }>
+}
+
+export const metadata: Metadata = {
+  title: "Home",
+  description:
+    "Your private Scheduler workspace for upcoming and overdue callbacks.",
+  robots: {
+    index: false,
+    follow: false,
+  },
 }
 
 function firstValue(value: string | string[] | undefined): string | undefined {
@@ -118,27 +136,97 @@ function CalendarPageState({ result, retryHref }: CalendarPageStateProps) {
   )
 }
 
+export function AuxiliaryDataWarnings({
+  overdueUnavailable,
+  retryHref,
+}: {
+  overdueUnavailable: boolean
+  retryHref: string
+}) {
+  if (!overdueUnavailable) return null
+  return (
+    <p
+      role="status"
+      aria-live="polite"
+      className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-foreground"
+    >
+      Overdue callbacks could not be loaded, so the Up next list may be
+      incomplete. <a className="underline" href={retryHref}>Try again</a>.
+    </p>
+  )
+}
+
+/**
+ * Authenticate once for the home render, then share that gate with every
+ * owner-scoped read. Each projection remains a separate query because the
+ * calendar, overdue, workload, and notification surfaces have different
+ * ranges and privacy requirements.
+ */
+export async function loadHomePageData(range: ReturnType<typeof getCalendarRange>) {
+  const authGate = await requireAuth()
+  return Promise.all([
+    getCalendarCallbacks(range, authGate),
+    getOverdueCallbacks(new Date(), authGate),
+    getWorkloadSummary(authGate),
+    getOpenNotificationSchedules(authGate),
+  ])
+}
+
 export default async function Page({ searchParams }: PageProps) {
   const parameters = await searchParams
   const view = normalizeCalendarView(firstValue(parameters.view))
   const focusedDate = normalizeDateKey(firstValue(parameters.date))
   const range = getCalendarRange(view, focusedDate)
-  const result = await getCalendarCallbacks(range)
+  const [result, overdueResult, workload, notificationResult] =
+    await loadHomePageData(range)
   const retryHref = `/?view=${view}&date=${focusedDate}`
 
   return (
-    <AppShell>
+    <AppShell
+      notificationSchedules={
+        notificationResult.status === "success"
+          ? notificationResult.schedules
+          : notificationResult.status === "unauthenticated"
+            ? null
+            : undefined
+      }
+    >
       <main
         id="main-content"
         className="min-h-dvh bg-background p-4 sm:p-6 lg:p-8"
       >
         <div className="mx-auto w-full max-w-[1600px]">
           {result.status === "success" ? (
-            <CallbackWorkspace
-              focusedDate={focusedDate}
-              view={view}
-              markers={result.markers}
-            />
+            <div className="flex flex-col gap-6">
+              {workload.status === "success" ? (
+                <WorkloadSummary
+                  open={workload.open}
+                  closedAts={workload.closedAts}
+                  retryHref={retryHref}
+                />
+              ) : (
+                <WorkloadSummary
+                  open={[]}
+                  closedAts={[]}
+                  retryHref={retryHref}
+                  unavailable
+                />
+              )}
+              <AuxiliaryDataWarnings
+                overdueUnavailable={overdueResult.status !== "success"}
+                retryHref={retryHref}
+              />
+              <CallbackWorkspace
+                focusedDate={focusedDate}
+                view={view}
+                markers={result.markers}
+                overdueMarkers={
+                  overdueResult.status === "success"
+                    ? overdueResult.markers
+                    : undefined
+                }
+              />
+            </div>
           ) : (
             <CalendarPageState result={result} retryHref={retryHref} />
           )}

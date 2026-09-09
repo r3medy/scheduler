@@ -3,22 +3,33 @@
 import { z } from "zod"
 
 import { requireAuth } from "@/lib/callbacks/require-auth"
-import { attemptNoteSchema } from "@/lib/callbacks/validation"
-import type { Database } from "@/lib/supabase/database.types"
 
 type AttemptOutcome = "voicemail" | "no_answer"
 type AttemptAction = "close" | "reschedule"
-type RpcArgs =
-  Database["public"]["Functions"]["record_callback_attempt"]["Args"]
+type AttemptSchedule =
+  | { mode: "exact"; scheduledAt: string }
+  | { mode: "window"; windowStartAt: string; windowEndAt: string }
 
 export type CallbackStatusResult =
-  { status: "success" } | { status: "error"; message: string; field?: string }
+  | { status: "success" }
+  | { status: "error"; message: string; field?: string }
+  | { status: "conflict"; message: string; reason?: "stale" }
 
 const callbackIdSchema = z.string().uuid()
+
+const STALE_STATUS_MESSAGE =
+  "This callback changed in another tab. Refresh to see the latest version, then try again."
 
 function text(formData: FormData, name: string) {
   const value = formData.get(name)
   return typeof value === "string" ? value.trim() : ""
+}
+
+function expectedUpdatedAtOf(formData: FormData): string | null {
+  const raw = formData.get("expected_updated_at")
+  if (typeof raw !== "string") return null
+  const value = raw.trim()
+  return value && Number.isFinite(Date.parse(value)) ? value : null
 }
 
 function parseTimestamp(
@@ -52,7 +63,12 @@ function parseTimestamp(
 function parseAttempt(
   formData: FormData
 ):
-  | { status: "success"; args: Omit<RpcArgs, "p_callback_id"> }
+  | {
+      status: "success"
+      outcome: AttemptOutcome
+      action: AttemptAction
+      schedule: AttemptSchedule | null
+    }
   | Extract<CallbackStatusResult, { status: "error" }> {
   const outcome = text(formData, "outcome")
   if (outcome !== "voicemail" && outcome !== "no_answer")
@@ -70,30 +86,14 @@ function parseAttempt(
       message: "Choose whether to close or reschedule the callback.",
     }
 
-  const noteResult = attemptNoteSchema.safeParse(text(formData, "note"))
-  if (!noteResult.success)
-    return {
-      status: "error",
-      field: "note",
-      message: noteResult.error.issues[0]?.message ?? "Enter a valid note.",
-    }
-
+  // Outcomes overwrite the callback's current resolution fields. No attempt
+  // history is preserved (explicit scope cut).
   const common = {
-    p_outcome: outcome as AttemptOutcome,
-    p_note: noteResult.data || null,
-    p_action: action as AttemptAction,
+    outcome: outcome as AttemptOutcome,
+    action: action as AttemptAction,
   }
   if (action === "close")
-    return {
-      status: "success",
-      args: {
-        ...common,
-        p_schedule_mode: null,
-        p_scheduled_at: null,
-        p_window_start_at: null,
-        p_window_end_at: null,
-      },
-    }
+    return { status: "success", ...common, schedule: null }
 
   const mode = text(formData, "schedule_mode")
   if (mode !== "exact" && mode !== "window")
@@ -108,13 +108,8 @@ function parseAttempt(
     if (scheduledAt.status === "error") return scheduledAt
     return {
       status: "success",
-      args: {
-        ...common,
-        p_schedule_mode: "exact",
-        p_scheduled_at: scheduledAt.value,
-        p_window_start_at: null,
-        p_window_end_at: null,
-      },
+      ...common,
+      schedule: { mode: "exact", scheduledAt: scheduledAt.value },
     }
   }
 
@@ -130,19 +125,54 @@ function parseAttempt(
     }
   return {
     status: "success",
-    args: {
-      ...common,
-      p_schedule_mode: "window",
-      p_scheduled_at: null,
-      p_window_start_at: windowStart.value,
-      p_window_end_at: windowEnd.value,
+    ...common,
+    schedule: {
+      mode: "window",
+      windowStartAt: windowStart.value,
+      windowEndAt: windowEnd.value,
     },
+  }
+}
+
+async function checkFreshness(
+  supabase: Awaited<ReturnType<typeof import("@/lib/supabase/server").createSupabaseServerClient>>,
+  userId: string,
+  id: string,
+  expected: string
+): Promise<CallbackStatusResult | null> {
+  try {
+    const { data, error } = await supabase
+      .from("callbacks")
+      .select("updated_at")
+      .eq("id", id)
+      .eq("user_id", userId)
+      .maybeSingle()
+    if (error || !data)
+      return {
+        status: "error",
+        message: "Could not change the status. Please try again.",
+      }
+    const current = (data as { updated_at?: string | null }).updated_at
+    if (current && current !== expected)
+      return {
+        status: "conflict",
+        reason: "stale",
+        message: STALE_STATUS_MESSAGE,
+      }
+    return null
+  } catch {
+    return {
+      status: "error",
+      message:
+        "Could not confirm the status change. Check your connection and reload.",
+    }
   }
 }
 
 export async function updateCallbackStatus(
   id: string,
-  input: string | FormData
+  input: string | FormData,
+  expectedUpdatedAt?: string
 ): Promise<CallbackStatusResult> {
   const gate = await requireAuth()
   if (gate.status === "unavailable")
@@ -166,8 +196,17 @@ export async function updateCallbackStatus(
         message:
           "Choose Close or Reschedule before saving an unsuccessful outcome.",
       }
+    const expected =
+      typeof expectedUpdatedAt === "string" &&
+      Number.isFinite(Date.parse(expectedUpdatedAt))
+        ? expectedUpdatedAt
+        : null
+    if (expected) {
+      const stale = await checkFreshness(supabase, user.id, id, expected)
+      if (stale) return stale
+    }
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("callbacks")
         .update({
           lifecycle_state: input === "open" ? "open" : "closed",
@@ -176,13 +215,20 @@ export async function updateCallbackStatus(
         })
         .eq("id", id)
         .eq("user_id", user.id)
-        .select("id")
-        .maybeSingle()
-      if (error || !data)
+      if (expected) query = query.eq("updated_at", expected)
+      const { data, error } = await query.select("id").maybeSingle()
+      if (error || !data) {
+        if (expected)
+          return {
+            status: "conflict",
+            reason: "stale",
+            message: STALE_STATUS_MESSAGE,
+          }
         return {
           status: "error",
           message: "Could not change the status. Please try again.",
         }
+      }
       return { status: "success" }
     } catch {
       return {
@@ -195,16 +241,78 @@ export async function updateCallbackStatus(
 
   const parsed = parseAttempt(input)
   if (parsed.status === "error") return parsed
+  const expected = expectedUpdatedAtOf(input)
+  if (expected) {
+    const stale = await checkFreshness(supabase, user.id, id, expected)
+    if (stale) return stale
+  }
   try {
-    const { data, error } = await supabase.rpc("record_callback_attempt", {
-      p_callback_id: id,
-      ...parsed.args,
-    })
-    if (error || data !== id)
+    let values:
+      | {
+          lifecycle_state: "closed"
+          resolution_outcome: AttemptOutcome
+          closed_at: string
+        }
+      | {
+          schedule_mode: "exact" | "window"
+          scheduled_at: string | null
+          window_start_at: string | null
+          window_end_at: string | null
+          lifecycle_state: "open"
+          resolution_outcome: null
+          closed_at: null
+        }
+    if (parsed.action === "close") {
+      values = {
+        lifecycle_state: "closed",
+        resolution_outcome: parsed.outcome,
+        closed_at: new Date().toISOString(),
+      }
+    } else if (parsed.schedule?.mode === "exact") {
+      values = {
+        schedule_mode: "exact",
+        scheduled_at: parsed.schedule.scheduledAt,
+        window_start_at: null,
+        window_end_at: null,
+        lifecycle_state: "open",
+        resolution_outcome: null,
+        closed_at: null,
+      }
+    } else if (parsed.schedule) {
+      values = {
+        schedule_mode: "window",
+        scheduled_at: null,
+        window_start_at: parsed.schedule.windowStartAt,
+        window_end_at: parsed.schedule.windowEndAt,
+        lifecycle_state: "open",
+        resolution_outcome: null,
+        closed_at: null,
+      }
+    } else {
       return {
         status: "error",
         message: "Could not record the outcome. Please try again.",
       }
+    }
+    let query = supabase
+      .from("callbacks")
+      .update(values)
+      .eq("id", id)
+      .eq("user_id", user.id)
+    if (expected) query = query.eq("updated_at", expected)
+    const { data, error } = await query.select("id").maybeSingle()
+    if (error || !data) {
+      if (expected)
+        return {
+          status: "conflict",
+          reason: "stale",
+          message: STALE_STATUS_MESSAGE,
+        }
+      return {
+        status: "error",
+        message: "Could not record the outcome. Please try again.",
+      }
+    }
     return { status: "success" }
   } catch {
     return {

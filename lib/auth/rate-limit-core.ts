@@ -20,6 +20,11 @@ export interface RateLimitDecision {
   retryAt: string | null
 }
 
+export interface RateLimitAdmission extends RateLimitDecision {
+  /** Monotonic bucket version captured by the atomic admission operation. */
+  admissionToken: number | null
+}
+
 export type RateLimitScope =
   "login-company" | "login-source" | "registration-source"
 
@@ -29,12 +34,27 @@ export interface RateLimitStore {
     key: string,
     bucket: RateLimitBucketConfiguration
   ): Promise<RateLimitDecision>
-  recordFailure(
+  admit(
     scope: RateLimitScope,
     key: string,
     bucket: RateLimitBucketConfiguration
+  ): Promise<RateLimitAdmission>
+  recordFailure(
+    scope: RateLimitScope,
+    key: string,
+    bucket: RateLimitBucketConfiguration,
+    admissionToken: number
   ): Promise<RateLimitDecision>
-  reset(scope: RateLimitScope, key: string): Promise<void>
+  reset(
+    scope: RateLimitScope,
+    key: string,
+    admissionToken: number
+  ): Promise<void>
+  release(
+    scope: RateLimitScope,
+    key: string,
+    admissionToken: number
+  ): Promise<void>
 }
 
 const DEFAULTS = {

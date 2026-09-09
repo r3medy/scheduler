@@ -47,9 +47,22 @@ export interface UpNextProps {
 export function UpNext({ markers }: UpNextProps) {
   const [now, setNow] = useState(() => new Date())
 
+  // Display state is derived from `now` on every render (see getDisplayState),
+  // so each tick re-evaluates due/grace/overdue without reload. Timers are
+  // throttled while the tab is hidden, so refresh immediately on resume.
   useEffect(() => {
-    const interval = window.setInterval(() => setNow(new Date()), 30_000)
-    return () => window.clearInterval(interval)
+    const refresh = () => setNow(new Date())
+    const interval = window.setInterval(refresh, 30_000)
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refresh()
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange)
+    window.addEventListener("focus", refresh)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener("visibilitychange", onVisibilityChange)
+      window.removeEventListener("focus", refresh)
+    }
   }, [])
 
   if (markers.length === 0) return null
@@ -109,7 +122,6 @@ export function UpNext({ markers }: UpNextProps) {
                     {new Date(marker.startsAt).toLocaleDateString("en-US", {
                       month: "short",
                       day: "numeric",
-                      timeZone: "Africa/Cairo",
                     })}{" "}
                     · {formatMarkerTime(marker)}
                   </span>
@@ -136,8 +148,7 @@ export function UpNext({ markers }: UpNextProps) {
       </ul>
       {remaining > 0 && (
         <p className="px-4 pb-3 text-xs text-muted-foreground tabular-nums">
-          +{remaining} more in this period — switch to Table view for the full
-          list.
+          +{remaining} more — switch to Table view for the full list.
         </p>
       )}
     </section>

@@ -1,5 +1,8 @@
 export const HISTORY_PAGE_SIZE = 25
 
+export const HISTORY_SEARCH_MIN_LENGTH = 2
+export const HISTORY_SEARCH_MAX_LENGTH = 64
+
 export const HISTORY_OUTCOMES = {
   reached: "Reached",
   voicemail: "Voicemail",
@@ -35,4 +38,14 @@ export function maskAccountNumber(accountNumber: string): string | null {
   if (!compactAccountNumber) return null
   if (compactAccountNumber.length <= 4) return "••••"
   return `•••• ${compactAccountNumber.slice(-4)}`
+}
+
+export function sanitizeHistorySearch(value: unknown): string {
+  if (typeof value !== "string") return ""
+  // Strip commas so the value cannot break the PostgREST `or` filter syntax.
+  return value.trim().replace(/,/g, "").slice(0, HISTORY_SEARCH_MAX_LENGTH)
+}
+
+export function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`)
 }

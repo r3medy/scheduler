@@ -13,7 +13,8 @@ import {
   addDaysToKey,
   getAdjacentDateKey,
   getCalendarRange,
-  getMarkerDateKey,
+  isMarkerInRange,
+  mergeMarkersById,
   toDateKey,
 } from "@/lib/calendar/date-utils"
 import type { CalendarMarker, CalendarView } from "@/lib/calendar/types"
@@ -25,6 +26,7 @@ export interface SchedulingCalendarProps {
   focusedDate: string
   view: CalendarView
   markers: CalendarMarker[]
+  overdueMarkers?: CalendarMarker[]
   className?: string
 }
 
@@ -32,6 +34,7 @@ export function SchedulingCalendar({
   focusedDate,
   view,
   markers,
+  overdueMarkers,
   className,
 }: SchedulingCalendarProps) {
   const router = useRouter()
@@ -45,13 +48,14 @@ export function SchedulingCalendar({
   const [isPending, startTransition] = useTransition()
   const today = toDateKey(new Date())
   const visibleRange = getCalendarRange(view, focusedDate)
-  const visibleMarkers = markers.filter((marker) => {
-    const dateKey = getMarkerDateKey(marker)
-    return (
-      dateKey >= visibleRange.startDate &&
-      dateKey < visibleRange.endDateExclusive
-    )
-  })
+  // Overlap (not start-only) so windows starting before the range but still
+  // open at its start remain represented.
+  const visibleMarkers = markers.filter((marker) =>
+    isMarkerInRange(marker, visibleRange)
+  )
+  // Action-needed list is navigation-independent: overdue outside the visible
+  // period is merged in (deduped) so it never disappears on navigation.
+  const upNextMarkers = mergeMarkersById(visibleMarkers, overdueMarkers)
 
   function navigate(nextView: CalendarView, nextDate: string) {
     const params = new URLSearchParams(searchParams.toString())
@@ -91,7 +95,7 @@ export function SchedulingCalendar({
           navigate(nextView, nextDate)
         }}
       />
-      <UpNext markers={visibleMarkers} />
+      <UpNext markers={upNextMarkers} />
       {view === "month" ? (
         <MonthView focusedDate={focusedDate} markers={visibleMarkers} />
       ) : view === "week" ? (

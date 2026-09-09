@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useSyncExternalStore, useState } from "react"
+import { useEffect, useState, useSyncExternalStore } from "react"
 import { useRouter } from "next/navigation"
 import { IconArrowUpRight, IconHistory } from "@tabler/icons-react"
 import { CallbackDetailsDialog } from "@/components/callbacks/callback-details-dialog"
@@ -9,6 +9,7 @@ import { NewCallbackDialog } from "@/components/callbacks/new-callback-dialog"
 import { buttonVariants } from "@/components/ui/button-variants"
 import {
   Empty,
+  EmptyContent,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
@@ -18,11 +19,10 @@ import { Skeleton } from "@/components/ui/skeleton"
 import {
   HISTORY_OUTCOMES,
   HISTORY_PAGE_SIZE,
+  HISTORY_SEARCH_MAX_LENGTH,
   type HistoryOutcome,
   type HistoryResult,
 } from "@/lib/callbacks/presentation"
-
-export { CallbackAttemptHistory } from "@/components/callbacks/callback-attempt-history"
 
 const HISTORY_COUNT_KEYS: readonly (HistoryOutcome | "all")[] = [
   "all",
@@ -43,7 +43,6 @@ function LocalDate({ value }: { value: string | null }) {
       {new Date(value).toLocaleString("en-US", {
         dateStyle: "medium",
         timeStyle: "short",
-        timeZone: "Africa/Cairo",
       })}
     </time>
   )
@@ -51,15 +50,39 @@ function LocalDate({ value }: { value: string | null }) {
 export function CallbackHistory({
   result,
   outcome,
+  search,
 }: {
   result: Extract<HistoryResult, { status: "success" }>
   outcome?: HistoryOutcome
+  search?: string
 }) {
   const router = useRouter()
   const [saved, setSaved] = useState(false)
+  const [searchValue, setSearchValue] = useState(search ?? "")
   const { counts, rows, page, total } = result
-  const href = (next: number) =>
-    `/history?page=${next}${outcome ? `&outcome=${outcome}` : ""}`
+  const buildHref = (
+    next: number,
+    activeOutcome: HistoryOutcome | undefined = outcome,
+    activeSearch: string = search ?? ""
+  ) => {
+    const params = new URLSearchParams()
+    if (next > 1) params.set("page", String(next))
+    if (activeOutcome) params.set("outcome", activeOutcome)
+    if (activeSearch.trim()) params.set("q", activeSearch.trim())
+    const query = params.toString()
+    return `/history${query ? `?${query}` : ""}`
+  }
+  const href = (next: number) => buildHref(next)
+  useEffect(() => {
+    const applied = search ?? ""
+    if (searchValue === applied) return
+    const handle = setTimeout(() => {
+      router.push(buildHref(1, outcome, searchValue))
+    }, 300)
+    return () => clearTimeout(handle)
+    // buildHref is derived from outcome/search props; depend on primitives only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchValue, outcome, search, router])
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -99,12 +122,26 @@ export function CallbackHistory({
       <section aria-label="Closed callbacks" className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-semibold">
-            Records{" "}
+            {search ? `Results for “${search}”` : "Records"}{" "}
             <span className="ml-2 text-sm font-normal text-muted-foreground">
               {total.toLocaleString()}
             </span>
           </h2>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <label htmlFor="history-search" className="sr-only">
+              Search closed callbacks
+            </label>
+            <input
+              id="history-search"
+              type="search"
+              role="searchbox"
+              value={searchValue}
+              maxLength={HISTORY_SEARCH_MAX_LENGTH}
+              autoComplete="off"
+              placeholder="Search name, phone, or account"
+              onChange={(event) => setSearchValue(event.target.value)}
+              className="h-9 w-full min-w-0 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-64"
+            />
             <label
               htmlFor="history-outcome"
               className="text-sm text-muted-foreground"
@@ -116,9 +153,13 @@ export function CallbackHistory({
               value={outcome ?? "all"}
               onChange={(event) =>
                 router.push(
-                  event.target.value === "all"
-                    ? "/history"
-                    : `/history?outcome=${event.target.value}`
+                  buildHref(
+                    1,
+                    event.target.value === "all"
+                      ? undefined
+                      : (event.target.value as HistoryOutcome),
+                    searchValue
+                  )
                 )
               }
               className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -201,16 +242,31 @@ export function CallbackHistory({
                 <IconHistory />
               </EmptyMedia>
               <EmptyTitle className="font-sans">
-                {outcome
-                  ? "No callbacks with this outcome"
-                  : "No closed callbacks yet"}
+                {search
+                  ? "No callbacks match this search"
+                  : outcome
+                    ? "No callbacks with this outcome"
+                    : "No closed callbacks yet"}
               </EmptyTitle>
               <EmptyDescription>
-                {outcome
-                  ? "Choose another outcome to see more records."
-                  : "Callbacks appear here when you record an outcome and close them."}
+                {search
+                  ? "Search matches names, phone numbers, and account numbers in your closed callbacks. Try a different term."
+                  : outcome
+                    ? "Choose another outcome to see more records."
+                    : "Callbacks appear here when you record an outcome and close them."}
               </EmptyDescription>
             </EmptyHeader>
+            {search && (
+              <EmptyContent>
+                <button
+                  type="button"
+                  onClick={() => setSearchValue("")}
+                  className={buttonVariants({ variant: "outline" })}
+                >
+                  Clear search
+                </button>
+              </EmptyContent>
+            )}
           </Empty>
         )}
         <div className="flex flex-wrap items-center justify-between gap-3">

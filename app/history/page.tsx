@@ -1,10 +1,12 @@
 import Link from "next/link"
+import type { Metadata } from "next"
 import { redirect } from "next/navigation"
 import { AppShell } from "@/components/app-shell"
 import { CallbackHistory } from "@/components/callbacks/callback-history"
 import { getHistory } from "@/lib/callbacks/get-history"
 import {
   HISTORY_OUTCOMES,
+  sanitizeHistorySearch,
   type HistoryOutcome,
 } from "@/lib/callbacks/presentation"
 import {
@@ -15,11 +17,22 @@ import {
   EmptyContent,
 } from "@/components/ui/empty"
 import { buttonVariants } from "@/components/ui/button-variants"
+import { getOpenNotificationSchedules } from "@/lib/notifications/get-open-notification-schedules"
+import { requireAuth } from "@/lib/callbacks/require-auth"
+
+export const metadata: Metadata = {
+  title: "Callback history",
+  description: "Review your closed callbacks and recorded outcomes.",
+  robots: {
+    index: false,
+    follow: false,
+  },
+}
 
 export default async function HistoryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ page?: string; outcome?: string }>
+  searchParams: Promise<{ page?: string; outcome?: string; q?: string }>
 }) {
   const params = await searchParams
   const page = Math.max(
@@ -30,14 +43,31 @@ export default async function HistoryPage({
     params.outcome && Object.hasOwn(HISTORY_OUTCOMES, params.outcome)
       ? (params.outcome as HistoryOutcome)
       : undefined
-  const result = await getHistory(page, outcome)
+  const search = sanitizeHistorySearch(params.q ?? "")
+  const authGate = await requireAuth()
+  const [result, notificationResult] = await Promise.all([
+    getHistory(page, outcome, search || undefined, authGate),
+    getOpenNotificationSchedules(authGate),
+  ])
   if (result.status === "unauthenticated") redirect("/login")
   return (
-    <AppShell>
+    <AppShell
+      notificationSchedules={
+        notificationResult.status === "success"
+          ? notificationResult.schedules
+          : notificationResult.status === "unauthenticated"
+            ? null
+            : undefined
+      }
+    >
       <main id="main-content" className="min-h-dvh p-4 sm:p-6 lg:p-8">
         <div className="mx-auto max-w-[1600px]">
           {result.status === "success" ? (
-            <CallbackHistory result={result} outcome={outcome} />
+            <CallbackHistory
+              result={result}
+              outcome={outcome}
+              search={search || undefined}
+            />
           ) : (
             <Empty className="min-h-96 border">
               <EmptyHeader>

@@ -3,6 +3,8 @@ import type { Metadata } from "next"
 
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
+import { MobileGatekeeper } from "@/components/mobile-gatekeeper"
+import { NotificationAuthLifecycle } from "@/components/notifications/notification-auth-lifecycle"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { reportRuntimeConfiguration } from "@/lib/config/runtime"
 import { cn } from "@/lib/utils"
@@ -27,8 +29,11 @@ export const metadata: Metadata = {
   description:
     "Scheduler is a private workspace for scheduling and rescheduling callbacks.",
   icons: {
-    icon: "/logo.png",
-    apple: "/logo.png",
+    icon: [
+      { url: "/favicon.ico", sizes: "16x16 32x32 48x48" },
+      { url: "/icon.png", type: "image/png", sizes: "512x512" },
+    ],
+    apple: [{ url: "/apple-icon.png", sizes: "180x180" }],
   },
 }
 
@@ -52,8 +57,12 @@ export default function RootLayout({
     >
       <body>
         <ThemeProvider>
-          <TooltipProvider>{children}</TooltipProvider>
+          <TooltipProvider>
+            <NotificationAuthLifecycle />
+            {children}
+          </TooltipProvider>
         </ThemeProvider>
+        <MobileGatekeeper />
       </body>
     </html>
   )

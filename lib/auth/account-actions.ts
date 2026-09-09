@@ -1,6 +1,6 @@
 "use server"
 
-import { authenticateLogin } from "@/lib/auth/actions"
+import { authenticateLogin } from "@/lib/auth/credentials"
 import { pinSchema } from "@/lib/auth/schema"
 import {
   createSupabaseServerClient,
@@ -16,6 +16,17 @@ import {
 
 export type AccountResult =
   { status: "success"; message: string } | { status: "error"; message: string }
+
+/**
+ * Session contract (see docs/auth-configuration.md "Session semantics"):
+ *
+ * - PIN change keeps the current session and leaves other signed-in devices
+ *   alone. A Supabase password update does not revoke existing sessions, so
+ *   no global logout is implied or promised.
+ * - Sign-out uses `scope: "local"` and clears only this device's session.
+ * - Account deletion removes the auth user (owned callbacks cascade at the
+ *   database layer) and then clears the local session cookie.
+ */
 const failure = (message: string): AccountResult => ({
   status: "error",
   message,
@@ -81,8 +92,7 @@ export async function changePin(data: FormData): Promise<AccountResult> {
 export async function signOutAccount(): Promise<AccountResult> {
   try {
     const config = getSupabaseConfiguration()
-    if (!config)
-      return failure("Could not log you out. Please try again.")
+    if (!config) return failure("Could not log you out. Please try again.")
     const supabase = await createSupabaseServerClient(config)
     const { error } = await supabase.auth
       .signOut({ scope: "local" })

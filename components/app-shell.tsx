@@ -3,6 +3,9 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { IconHome, IconHistory } from "@tabler/icons-react"
+import { FeedbackWidget } from "@/components/feedback/feedback-widget"
+import { NotificationHost } from "@/components/notifications/notification-host"
+import type { SchedulableCallback } from "@/lib/notifications/types"
 import { SettingsDialog } from "@/components/settings-dialog"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -11,7 +14,18 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  children,
+  notificationSchedules,
+}: {
+  children: React.ReactNode
+  /**
+   * Complete owner-scoped schedules when the query succeeds. `null` is an
+   * explicit unauthenticated state and clears the client registry; `undefined`
+   * means the query failed and must not reconcile with partial data.
+   */
+  notificationSchedules?: SchedulableCallback[] | null
+}) {
   const pathname = usePathname()
   return (
     <div className="min-h-dvh">
@@ -62,7 +76,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <SettingsDialog />
         </nav>
       </aside>
-      <div className="app-content">{children}</div>
+      <div className="app-content">
+        {notificationSchedules !== undefined ? (
+          <NotificationHost schedules={notificationSchedules ?? []} />
+        ) : null}
+        {children}
+      </div>
+      <FeedbackWidget />
     </div>
   )
 }

@@ -146,13 +146,13 @@ export function LoginForm() {
             inputMode="text"
             value={companyId}
             onChange={(event) =>
-              setCompanyId(event.currentTarget.value.toUpperCase())
+              setCompanyId(event.currentTarget.value.trim().toUpperCase())
             }
             autoCapitalize="characters"
             autoComplete="username"
             spellCheck={false}
             placeholder="E12345"
-            maxLength={6}
+            maxLength={20}
             onBlur={handleCompanyBlur}
           />
         </AuthField>

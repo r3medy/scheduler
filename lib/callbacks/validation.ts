@@ -4,7 +4,6 @@ import type { Database } from "@/lib/supabase/database.types"
 import {
   ACCOUNT_HOLDER_NAME_MAX_LENGTH,
   ACCOUNT_NUMBER_MAX_LENGTH,
-  ATTEMPT_NOTE_MAX_LENGTH,
   COMMENTS_MAX_LENGTH,
   PHONE_NUMBER_MAX_LENGTH,
 } from "@/lib/callbacks/limits"
@@ -12,7 +11,6 @@ import {
 export {
   ACCOUNT_HOLDER_NAME_MAX_LENGTH,
   ACCOUNT_NUMBER_MAX_LENGTH,
-  ATTEMPT_NOTE_MAX_LENGTH,
   CALLBACK_FIELD_MAX_LENGTHS,
   COMMENTS_MAX_LENGTH,
   PHONE_NUMBER_MAX_LENGTH,
@@ -48,21 +46,46 @@ const callbackTextSchema = z.object({
     ),
 })
 
-export const attemptNoteSchema = z
-  .string()
-  .trim()
-  .max(
-    ATTEMPT_NOTE_MAX_LENGTH,
-    `Attempt note must be ${ATTEMPT_NOTE_MAX_LENGTH} characters or fewer.`
-  )
-
 export type CallbackValues = Omit<
   Database["public"]["Tables"]["callbacks"]["Insert"],
   "user_id"
 >
 
+export type ExistingSchedule = {
+  schedule_mode: string | null
+  scheduled_at: string | null
+  window_start_at: string | null
+  window_end_at: string | null
+}
+
+function sameInstant(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  const parsedA = Date.parse(a)
+  const parsedB = Date.parse(b)
+  if (!Number.isFinite(parsedA) || !Number.isFinite(parsedB)) return a === b
+  return parsedA === parsedB
+}
+
+export function isScheduleUnchanged(
+  values: CallbackValues,
+  existing: ExistingSchedule
+): boolean {
+  if (existing.schedule_mode !== values.schedule_mode) return false
+  if (values.schedule_mode === "exact")
+    return sameInstant(values.scheduled_at, existing.scheduled_at)
+  return (
+    sameInstant(values.window_start_at, existing.window_start_at) &&
+    sameInstant(values.window_end_at, existing.window_end_at)
+  )
+}
+
 export function parseCallbackInput(
-  formData: FormData
+  formData: FormData,
+  options?: { requireFutureStart?: boolean }
 ):
   | { status: "success"; values: CallbackValues }
   | { status: "error"; field: string; message: string } {
@@ -117,7 +140,8 @@ export function parseCallbackInput(
     }
   }
   const startField = mode === "exact" ? "scheduled_at" : "window_start_at"
-  if (Date.parse(text(startField)) <= Date.now()) {
+  const requireFutureStart = options?.requireFutureStart ?? true
+  if (requireFutureStart && Date.parse(text(startField)) <= Date.now()) {
     return {
       status: "error",
       field: startField,
@@ -137,4 +161,41 @@ export function parseCallbackInput(
       window_end_at: mode === "window" ? text("window_end_at") : null,
     },
   }
+}
+
+export function parseCallbackCreateInput(
+  formData: FormData
+):
+  | { status: "success"; values: CallbackValues }
+  | { status: "error"; field: string; message: string } {
+  return parseCallbackInput(formData, { requireFutureStart: true })
+}
+
+export function parseCallbackUpdateInput(
+  formData: FormData,
+  existing?: ExistingSchedule | null
+):
+  | { status: "success"; values: CallbackValues }
+  | { status: "error"; field: string; message: string } {
+  const parsed = parseCallbackInput(formData, { requireFutureStart: false })
+  if (parsed.status === "error") return parsed
+  // Detail-only edits on an overdue callback keep the stored schedule, so
+  // only a changed schedule must start in the future.
+  if (existing && isScheduleUnchanged(parsed.values, existing)) return parsed
+  const startField =
+    parsed.values.schedule_mode === "exact"
+      ? "scheduled_at"
+      : "window_start_at"
+  const start =
+    parsed.values.schedule_mode === "exact"
+      ? parsed.values.scheduled_at
+      : parsed.values.window_start_at
+  if (!start || Date.parse(start) <= Date.now()) {
+    return {
+      status: "error",
+      field: startField,
+      message: "Choose a date and time in the future.",
+    }
+  }
+  return parsed
 }

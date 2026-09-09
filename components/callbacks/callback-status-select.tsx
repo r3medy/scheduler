@@ -3,6 +3,10 @@
 import { useId, useRef, useState } from "react"
 import type { CallbackRecord } from "@/lib/callbacks/get-callback"
 import { updateCallbackStatus } from "@/lib/callbacks/update-status"
+import {
+  cancelCallbackNotifications,
+  scheduleFromRecord,
+} from "@/lib/notifications/sync"
 
 export function CallbackStatusSelect({
   callback,
@@ -28,8 +32,12 @@ export function CallbackStatusSelect({
     setError(null)
     try {
       const result = await updateCallbackStatus(callback.id, next)
-      if (result.status === "success") onSaved()
-      else {
+      if (result.status === "success") {
+        if (next === "open")
+          scheduleFromRecord({ ...callback, lifecycle_state: "open" })
+        else cancelCallbackNotifications(callback.id)
+        onSaved()
+      } else {
         setValue(current)
         setError(result.message)
       }

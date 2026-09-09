@@ -26,6 +26,7 @@
 /.vercel/
 /test-results/
 /playwright-report/
+/supabase/.temp/
 /.agents/
 /.fallow/
 /browserbase/

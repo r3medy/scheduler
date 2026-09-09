@@ -27,8 +27,9 @@ import { ScheduleDateTime } from "@/components/callbacks/schedule-date-time"
 import {
   createCallback,
   updateCallback,
-  type CreateCallbackResult,
 } from "@/lib/callbacks/create-callback"
+import type { CreateCallbackResult } from "@/lib/callbacks/callback-idempotency"
+import { scheduleFromFormData } from "@/lib/notifications/sync"
 import {
   ACCOUNT_HOLDER_NAME_MAX_LENGTH,
   ACCOUNT_NUMBER_MAX_LENGTH,
@@ -40,6 +41,65 @@ const CALLBACK_INPUT_MAX_LENGTHS: Record<string, number> = {
   phone_number: PHONE_NUMBER_MAX_LENGTH,
   account_number: ACCOUNT_NUMBER_MAX_LENGTH,
   account_holder_name: ACCOUNT_HOLDER_NAME_MAX_LENGTH,
+}
+
+function newIdempotencyKey(): string {
+  try {
+    const cryptoRef = (globalThis as {
+      crypto?: { randomUUID?: () => string }
+    }).crypto
+    if (typeof cryptoRef?.randomUUID === "function")
+      return cryptoRef.randomUUID()
+  } catch {
+    // Fall through to the Math.random fallback below.
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = Math.floor(Math.random() * 16)
+    const v = c === "x" ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
+function sameMinute(a: number, b: number): boolean {
+  return Math.floor(a / 60000) === Math.floor(b / 60000)
+}
+
+function isEditScheduleUnchanged(
+  data: FormData,
+  modeValue: string,
+  record: CallbackRecord
+): boolean {
+  if (modeValue !== record.schedule_mode) return false
+  try {
+    if (modeValue === "exact") {
+      const raw = String(data.get("scheduled_at") ?? "")
+      if (!raw || !record.scheduled_at) return false
+      const next = new Date(raw).getTime()
+      const current = Date.parse(record.scheduled_at)
+      if (!Number.isFinite(next) || !Number.isFinite(current)) return false
+      return sameMinute(next, current)
+    }
+    const startRaw = String(data.get("window_start_at") ?? "")
+    const endRaw = String(data.get("window_end_at") ?? "")
+    if (!startRaw || !endRaw || !record.window_start_at || !record.window_end_at)
+      return false
+    const nextStart = new Date(startRaw).getTime()
+    const nextEnd = new Date(endRaw).getTime()
+    const currentStart = Date.parse(record.window_start_at)
+    const currentEnd = Date.parse(record.window_end_at)
+    if (
+      !Number.isFinite(nextStart) ||
+      !Number.isFinite(nextEnd) ||
+      !Number.isFinite(currentStart) ||
+      !Number.isFinite(currentEnd)
+    )
+      return false
+    return (
+      sameMinute(nextStart, currentStart) && sameMinute(nextEnd, currentEnd)
+    )
+  } catch {
+    return false
+  }
 }
 
 export function NewCallbackDialog({
@@ -56,6 +116,7 @@ export function NewCallbackDialog({
   const [mode, setMode] = useState<"exact" | "window">("exact")
   const [pending, setPending] = useState(false)
   const [result, setResult] = useState<CreateCallbackResult | null>(null)
+  const [idempotencyKey, setIdempotencyKey] = useState(newIdempotencyKey)
   const submitting = useRef(false)
   const formRef = useRef<HTMLFormElement>(null)
   const [minimum, setMinimum] = useState(nextScheduleMinute)
@@ -70,12 +131,28 @@ export function NewCallbackDialog({
     if (submitting.current) return
     const data = new FormData(event.currentTarget)
     data.set("schedule_mode", mode)
-    data.set("allowConflict", String(result?.status === "conflict"))
+    data.set("idempotency_key", idempotencyKey)
+    if (callback?.updated_at)
+      data.set("expected_updated_at", callback.updated_at)
+    data.set("allowConflict", String(result?.status === "conflict" && result.reason !== "stale"))
+    const scheduleUnchanged =
+      callback != null && isEditScheduleUnchanged(data, mode, callback)
     for (const field of mode === "exact"
       ? ["scheduled_at"]
       : ["window_start_at", "window_end_at"]) {
       const value = new Date(String(data.get(field)))
-      if (!Number.isFinite(value.getTime()) || value.getTime() <= Date.now()) {
+      if (!Number.isFinite(value.getTime())) {
+        setResult({
+          status: "error",
+          field,
+          message: "Enter a valid date and time.",
+        })
+        document.getElementById(`new-${field}`)?.focus()
+        return
+      }
+      // Detail-only edits keep an overdue schedule; only a changed schedule
+      // must be in the future.
+      if (!scheduleUnchanged && value.getTime() <= Date.now()) {
         setResult({
           status: "error",
           field,
@@ -97,6 +174,8 @@ export function NewCallbackDialog({
         : createCallback(data))
       setResult(next)
       if (next.status === "success") {
+        if (callback)
+          scheduleFromFormData(callback.id, data, callback.lifecycle_state)
         setOpen(false)
         onSaved()
         router.refresh()
@@ -175,6 +254,7 @@ export function NewCallbackDialog({
         }
         if (next) {
           setResult(null)
+          setIdempotencyKey(newIdempotencyKey())
           setMode(callback?.schedule_mode ?? "exact")
           setMinimum(nextScheduleMinute())
           onOpen()
@@ -266,13 +346,39 @@ export function NewCallbackDialog({
               {result?.status === "error" && !result.field && (
                 <FieldError>{result.message}</FieldError>
               )}
-              {result?.status === "conflict" && (
-                <p
-                  role="status"
-                  className="rounded-md border bg-muted p-3 text-sm"
+              {result?.status === "conflict" && result.reason === "stale" ? (
+                <div
+                  role="alert"
+                  className="flex flex-col gap-2 rounded-md border bg-muted p-3 text-sm"
                 >
-                  {result.message}
-                </p>
+                  <p>{result.message}</p>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={pending}
+                      onClick={() => {
+                        onSaved()
+                        router.refresh()
+                      }}
+                    >
+                      Refresh latest
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Your entries are kept. Refresh, then choose Save again.
+                  </p>
+                </div>
+              ) : (
+                result?.status === "conflict" && (
+                  <p
+                    role="status"
+                    className="rounded-md border bg-muted p-3 text-sm"
+                  >
+                    {result.message}
+                  </p>
+                )
               )}
             </FieldGroup>
           </fieldset>

@@ -7,6 +7,7 @@ import {
   formatMarkerAccessibleLabel,
   formatMarkerTime,
   getDisplayState,
+  getMarkerDateKeys,
   getMarkerMinuteOfDay,
   getWeekDays,
   getWeekHourBounds,
@@ -34,8 +35,10 @@ export interface WeekViewProps {
 export function WeekView({ focusedDate, markers }: WeekViewProps) {
   const days = getWeekDays(focusedDate)
   const dayKeys = new Set(days.map(toDateKey))
+  // Overlap (not start-only): windows spanning midnight stay visible on every
+  // day they touch, including days after they started.
   const visibleMarkers = markers.filter((marker) =>
-    dayKeys.has(toDateKey(new Date(marker.startsAt)))
+    getMarkerDateKeys(marker).some((dateKey) => dayKeys.has(dateKey))
   )
   const groupedMarkers = groupMarkersByDate(visibleMarkers)
   const { startHour, endHour } = getWeekHourBounds(visibleMarkers)
@@ -107,7 +110,6 @@ export function WeekView({ focusedDate, markers }: WeekViewProps) {
                       month: "long",
                       day: "numeric",
                       year: "numeric",
-                      timeZone: "Africa/Cairo",
                     }
                   )}, ${formatHour(hour)}`}
                   className={cn(

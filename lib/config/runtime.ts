@@ -9,6 +9,14 @@ const RUNTIME_VARIABLES = {
   authRateLimitSecret: "AUTH_RATE_LIMIT_SECRET",
 } as const
 
+const TRUSTED_SOURCE_VARIABLES = {
+  trustedClientIpHeader: "TRUSTED_CLIENT_IP_HEADER",
+  trustedDeployRegions: "TRUSTED_DEPLOY_REGIONS",
+} as const
+
+const MAX_TRUSTED_HEADER_NAME_LENGTH = 64
+const TRUSTED_HEADER_NAME_PATTERN = /^[a-z0-9-]+$/
+
 type RuntimeVariable =
   (typeof RUNTIME_VARIABLES)[keyof typeof RUNTIME_VARIABLES]
 
@@ -22,6 +30,20 @@ export interface RuntimeConfiguration {
 export interface SupabaseAdminConfiguration {
   url: string
   serviceRoleKey: string
+}
+
+export interface TrustedClientSourceSettings {
+  /**
+   * Lowercase name of the single provider-controlled header trusted as the
+   * client source, or null when no header is trusted. Never defaults to
+   * `x-forwarded-for`: arbitrary forwarded headers are spoofable.
+   */
+  headerName: string | null
+  /**
+   * Optional allowlist of deployment regions that may use the trusted header,
+   * or null when any region may use it.
+   */
+  allowedRegions: readonly string[] | null
 }
 
 export interface RuntimeConfigurationIssue {
@@ -58,6 +80,66 @@ export function parseAuthRateLimitSecret(
   return secret && secret.length >= MIN_AUTH_RATE_LIMIT_SECRET_LENGTH
     ? secret
     : null
+}
+
+/**
+ * Parse the operator-configured trusted client-IP header. Malformed values
+ * fail closed to null (no header trusted). See docs/auth-configuration.md.
+ */
+export function parseTrustedClientIpHeader(
+  value: string | undefined
+): string | null {
+  if (value === undefined) return null
+  const name = value.trim().toLowerCase()
+  if (
+    name === "" ||
+    name.length > MAX_TRUSTED_HEADER_NAME_LENGTH ||
+    !TRUSTED_HEADER_NAME_PATTERN.test(name)
+  ) {
+    return null
+  }
+  return name
+}
+
+/**
+ * Parse the optional comma-separated region allowlist for the trusted client
+ * source header. Returns null when unset or empty (no region restriction).
+ */
+export function parseTrustedDeployRegions(
+  value: string | undefined
+): readonly string[] | null {
+  if (value === undefined) return null
+  const regions = value
+    .split(",")
+    .map((region) => region.trim())
+    .filter((region) => region !== "")
+  return regions.length > 0 ? regions : null
+}
+
+export function getTrustedClientSourceSettings(
+  env: Record<string, string | undefined> = process.env
+): TrustedClientSourceSettings {
+  return {
+    headerName: parseTrustedClientIpHeader(
+      env[TRUSTED_SOURCE_VARIABLES.trustedClientIpHeader]
+    ),
+    allowedRegions: parseTrustedDeployRegions(
+      env[TRUSTED_SOURCE_VARIABLES.trustedDeployRegions]
+    ),
+  }
+}
+
+/**
+ * Current deployment region from hosting-provider variables, or null when
+ * unknown. Used only to gate the trusted client-source header.
+ */
+export function getCurrentDeployRegion(
+  env: Record<string, string | undefined> = process.env
+): string | null {
+  const region = env.DEPLOY_REGION ?? env.VERCEL_REGION ?? env.FLY_REGION
+  if (typeof region !== "string") return null
+  const trimmed = region.trim()
+  return trimmed === "" ? null : trimmed
 }
 
 function isSupabaseUrl(value: string): boolean {

@@ -94,7 +94,6 @@ export function TableView({ markers }: TableViewProps) {
                   {new Date(marker.startsAt).toLocaleDateString("en-US", {
                     month: "short",
                     day: "numeric",
-                    timeZone: "Africa/Cairo",
                   })}
                 </span>
                 <span className="block text-xs text-muted-foreground">

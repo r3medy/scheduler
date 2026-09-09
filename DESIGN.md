@@ -509,3 +509,11 @@ A component is design-complete only when:
 - New tokens require a named semantic role and both light and dark values.
 - New component variants require a recurring product use case; one-off decoration is not sufficient.
 - The custom scheduling calendar receives a dedicated specification at implementation time and must preserve all calendar rules in this document and `PRODUCT.md`.
+
+---
+
+## September 6 implementation note — branding/metadata/CI scope
+
+- Added: favicon set (`public/favicon.ico` 16/32/48, `public/icon.png` 512, `public/apple-icon.png` 180) referenced from the root layout; `public/logo.png` retained. Tiny-size legibility on light/dark tabs still needs a production visual check.
+- Added: generic not-found/error/global-error states following the quiet operational style (inline explanation plus recovery action, no customer data).
+- Deferred: dedicated warning/success tokens, workload chart representation, and any new tokens/variants beyond this scope.

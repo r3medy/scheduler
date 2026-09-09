@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   signOut: vi.fn(),
 }))
 vi.mock("server-only", () => ({}))
-vi.mock("@/lib/auth/actions", () => ({ authenticateLogin: mocks.verify }))
+vi.mock("@/lib/auth/credentials", () => ({ authenticateLogin: mocks.verify }))
 vi.mock("@/lib/supabase/server", () => ({
   getSupabaseConfiguration: () => ({}),
   createSupabaseServerClient: () => ({

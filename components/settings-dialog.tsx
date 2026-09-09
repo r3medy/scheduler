@@ -15,9 +15,16 @@ import {
   type AccountResult,
 } from "@/lib/auth/account-actions"
 import { Button } from "@/components/ui/button"
+import { NotificationPermissionSection } from "@/components/notifications/permission-section"
+import { announceSignOut } from "@/lib/notifications/dedupe"
+import { clearAllNotificationState } from "@/lib/notifications/sync"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import {
   Dialog,
-  DialogTrigger,
   DialogContent,
   DialogTitle,
   DialogDescription,
@@ -199,7 +206,11 @@ export function SettingsDialog() {
       setResult(next)
       if (next.status === "success") {
         form.reset()
-        if (deleting) window.location.replace("/login")
+        if (deleting) {
+          clearAllNotificationState()
+          announceSignOut()
+          window.location.replace("/login")
+        }
       }
     } catch {
       setResult({
@@ -220,6 +231,8 @@ export function SettingsDialog() {
     try {
       const next = await signOutAccount()
       if (next.status === "success") {
+        clearAllNotificationState()
+        announceSignOut()
         window.location.replace("/login")
         return
       }
@@ -248,16 +261,24 @@ export function SettingsDialog() {
         setResult(null)
       }}
     >
-      <DialogTrigger
-        className="rail-item"
-        aria-label="Settings"
-        title="Settings"
-      >
-        <span className="rail-icon">
-          <IconSettings aria-hidden="true" />
-        </span>
-        <span>Settings</span>
-      </DialogTrigger>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              className="rail-item"
+              aria-label="Settings"
+              onClick={() => setOpen(true)}
+            />
+          }
+        >
+          <span className="rail-icon">
+            <IconSettings aria-hidden="true" />
+          </span>
+          <span>Settings</span>
+        </TooltipTrigger>
+        <TooltipContent side="right">Settings</TooltipContent>
+      </Tooltip>
       <DialogContent role={deleting ? "alertdialog" : "dialog"}>
         <div className="flex items-start justify-between gap-4 border-b p-6">
           <div className="flex flex-col gap-2">
@@ -316,6 +337,12 @@ export function SettingsDialog() {
                 >
                   {pending ? "Updating PIN…" : "Update PIN"}
                 </Button>
+              )}
+              {!deleting && (
+                <>
+                  <Separator />
+                  <NotificationPermissionSection />
+                </>
               )}
               {!deleting && (
                 <DangerZone

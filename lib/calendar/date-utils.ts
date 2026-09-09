@@ -254,11 +254,23 @@ export function formatMarkerTime(marker: CalendarMarker): string {
   return `${formatTime(marker.windowStartAt)}–${formatTime(marker.windowEndAt)}`
 }
 
-export function formatMarkerAccessibleLabel(marker: CalendarMarker): string {
+export function formatMarkerAccessibleLabel(
+  marker: CalendarMarker,
+  now = new Date()
+): string {
   const account = marker.accountReference
     ? `, account ${marker.accountReference}`
     : ""
-  const state = CALENDAR_STATE_LABELS[marker.temporalState]
+  const temporal =
+    marker.scheduleMode === "exact"
+      ? deriveTemporalState("exact", marker.scheduledAt, null, now)
+      : deriveTemporalState(
+          "window",
+          marker.windowStartAt,
+          marker.windowEndAt,
+          now
+        )
+  const state = CALENDAR_STATE_LABELS[temporal]
   const schedule =
     marker.scheduleMode === "exact"
       ? `at ${formatTime(marker.scheduledAt)}`
@@ -271,16 +283,76 @@ export function getMarkerDateKey(marker: CalendarMarker): string {
   return toDateKey(new Date(marker.startsAt))
 }
 
+export function getMarkerEndAt(marker: CalendarMarker): string {
+  return marker.scheduleMode === "window"
+    ? marker.windowEndAt
+    : marker.scheduledAt
+}
+
+/**
+ * Every local calendar date a marker overlaps, inclusive of both endpoints.
+ * Exact callbacks occupy a single date; windows spanning midnight (or longer)
+ * occupy each date they touch so a still-open window is never hidden on the
+ * days after it started. Capped to avoid pathological duplication.
+ */
+export function getMarkerDateKeys(marker: CalendarMarker): string[] {
+  const startKey = toDateKey(new Date(marker.startsAt))
+  const endKey = toDateKey(new Date(getMarkerEndAt(marker)))
+  if (startKey >= endKey) return [startKey]
+
+  const keys: string[] = []
+  let current: Date | null = parseDateKey(startKey)
+  const end: Date | null = parseDateKey(endKey)
+  if (!current || !end) return [startKey]
+
+  let guard = 0
+  while (current <= end && guard < 62) {
+    keys.push(toDateKey(current))
+    current = addDays(current, 1)
+    guard += 1
+  }
+  return keys.length > 0 ? keys : [startKey]
+}
+
+/** True when the marker overlaps any date in [startDate, endDateExclusive). */
+export function isMarkerInRange(
+  marker: CalendarMarker,
+  range: CalendarRange
+): boolean {
+  return getMarkerDateKeys(marker).some(
+    (dateKey) =>
+      dateKey >= range.startDate && dateKey < range.endDateExclusive
+  )
+}
+
+/** Merge range-visible markers with navigation-independent overdue, deduped by id. */
+export function mergeMarkersById(
+  visible: CalendarMarker[],
+  overdue: CalendarMarker[] | undefined
+): CalendarMarker[] {
+  if (!overdue || overdue.length === 0) return visible
+  const seen = new Set(visible.map((marker) => marker.id))
+  const merged = [...visible]
+  for (const marker of overdue) {
+    if (!seen.has(marker.id)) {
+      seen.add(marker.id)
+      merged.push(marker)
+    }
+  }
+  return merged
+}
+
 export function groupMarkersByDate(
   markers: CalendarMarker[]
 ): Map<string, CalendarMarker[]> {
   const grouped = new Map<string, CalendarMarker[]>()
 
   for (const marker of markers) {
-    const dateKey = getMarkerDateKey(marker)
-    const dateMarkers = grouped.get(dateKey) ?? []
-    dateMarkers.push(marker)
-    grouped.set(dateKey, dateMarkers)
+    for (const dateKey of getMarkerDateKeys(marker)) {
+      const dateMarkers = grouped.get(dateKey) ?? []
+      dateMarkers.push(marker)
+      grouped.set(dateKey, dateMarkers)
+    }
   }
 
   for (const dateMarkers of grouped.values()) {
@@ -335,17 +407,27 @@ const CALENDAR_STATE_PRIORITY = {
 } satisfies Record<CalendarTemporalState, number>
 
 export function getMostUrgentState(
-  markers: CalendarMarker[]
+  markers: CalendarMarker[],
+  now = new Date()
 ): CalendarTemporalState | null {
   let mostUrgent: CalendarTemporalState | null = null
 
   for (const marker of markers) {
+    const temporal =
+      marker.scheduleMode === "exact"
+        ? deriveTemporalState("exact", marker.scheduledAt, null, now)
+        : deriveTemporalState(
+            "window",
+            marker.windowStartAt,
+            marker.windowEndAt,
+            now
+          )
     if (
       mostUrgent === null ||
-      CALENDAR_STATE_PRIORITY[marker.temporalState] >
+      CALENDAR_STATE_PRIORITY[temporal] >
         CALENDAR_STATE_PRIORITY[mostUrgent]
     ) {
-      mostUrgent = marker.temporalState
+      mostUrgent = temporal
     }
   }
 
@@ -379,9 +461,18 @@ export function getDisplayState(
   marker: CalendarMarker,
   now = new Date()
 ): CalendarDisplayState {
-  if (marker.temporalState === "overdue") return "overdue"
-  if (marker.temporalState === "due") return "due"
-  if (marker.temporalState === "grace") return "grace"
+  const temporal =
+    marker.scheduleMode === "exact"
+      ? deriveTemporalState("exact", marker.scheduledAt, null, now)
+      : deriveTemporalState(
+          "window",
+          marker.windowStartAt,
+          marker.windowEndAt,
+          now
+        )
+  if (temporal === "overdue") return "overdue"
+  if (temporal === "due") return "due"
+  if (temporal === "grace") return "grace"
   const markerDay = toDateKey(new Date(marker.startsAt))
   return markerDay === toDateKey(now) ? "today" : "upcoming"
 }

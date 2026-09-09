@@ -13,9 +13,12 @@ import { IconX } from "@tabler/icons-react"
 import { useRouter } from "next/navigation"
 import { deleteCallback } from "@/lib/callbacks/delete-callback"
 import { updateCallbackStatus } from "@/lib/callbacks/update-status"
-import { ATTEMPT_NOTE_MAX_LENGTH } from "@/lib/callbacks/limits"
+import {
+  cancelCallbackNotifications,
+  scheduleFromFormData,
+  scheduleFromRecord,
+} from "@/lib/notifications/sync"
 import { nextScheduleMinute } from "@/lib/callbacks/local-date"
-import { CallbackAttemptHistory } from "@/components/callbacks/callback-attempt-history"
 import { ScheduleDateTime } from "@/components/callbacks/schedule-date-time"
 import {
   getCallback,
@@ -25,7 +28,6 @@ import {
 import { NewCallbackDialog } from "@/components/callbacks/new-callback-dialog"
 import { Button } from "@/components/ui/button"
 import { Field, FieldError, FieldLabel } from "@/components/ui/field"
-import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   Dialog,
@@ -40,7 +42,6 @@ function formatCallbackDate(date: string) {
   return new Date(date).toLocaleString("en-US", {
     dateStyle: "medium",
     timeStyle: "short",
-    timeZone: "Africa/Cairo",
   })
 }
 
@@ -49,9 +50,11 @@ type UnsuccessfulOutcome = "voicemail" | "no_answer"
 function CallbackOutcomeForm({
   callback,
   onSaved,
+  onRefresh,
 }: {
   callback: CallbackRecord
   onSaved: () => void
+  onRefresh: () => void
 }) {
   const id = useId()
   const current =
@@ -63,11 +66,11 @@ function CallbackOutcomeForm({
     "close"
   )
   const [mode, setMode] = useState<"exact" | "window">("exact")
-  const [note, setNote] = useState("")
   const [minimum, setMinimum] = useState(nextScheduleMinute)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [errorField, setErrorField] = useState<string | null>(null)
+  const [stale, setStale] = useState(false)
   const formRef = useRef<HTMLFormElement>(null)
   const submitting = useRef(false)
   const unsuccessful =
@@ -101,6 +104,7 @@ function CallbackOutcomeForm({
     setValue(next)
     setError(null)
     setErrorField(null)
+    setStale(false)
     if (next === "voicemail" || next === "no_answer") {
       setAttemptAction("close")
       return
@@ -109,9 +113,19 @@ function CallbackOutcomeForm({
     submitting.current = true
     setPending(true)
     try {
-      const result = await updateCallbackStatus(callback.id, next)
-      if (result.status === "success") onSaved()
-      else {
+      const result = callback.updated_at
+        ? await updateCallbackStatus(callback.id, next, callback.updated_at)
+        : await updateCallbackStatus(callback.id, next)
+      if (result.status === "success") {
+        if (next === "open")
+          scheduleFromRecord({ ...callback, lifecycle_state: "open" })
+        else cancelCallbackNotifications(callback.id)
+        onSaved()
+      } else if (result.status === "conflict") {
+        setValue(current)
+        setStale(true)
+        setError(result.message)
+      } else {
         setValue(current)
         setError(result.message)
       }
@@ -132,7 +146,8 @@ function CallbackOutcomeForm({
     const data = new FormData(event.currentTarget)
     data.set("outcome", value as UnsuccessfulOutcome)
     data.set("attempt_action", attemptAction)
-    data.set("note", note)
+    if (callback.updated_at)
+      data.set("expected_updated_at", callback.updated_at)
     if (attemptAction === "reschedule") {
       data.set("schedule_mode", mode)
       const fields =
@@ -164,10 +179,21 @@ function CallbackOutcomeForm({
     setPending(true)
     setError(null)
     setErrorField(null)
+    setStale(false)
     try {
       const result = await updateCallbackStatus(callback.id, data)
-      if (result.status === "success") onSaved()
-      else {
+      if (result.status === "success") {
+        if (attemptAction === "reschedule")
+          scheduleFromFormData(callback.id, data, "open")
+        else cancelCallbackNotifications(callback.id)
+        onSaved()
+      } else if (result.status === "conflict") {
+        // Keep the schedule inputs so the agent can refresh and
+        // retry without losing work or recording a duplicate.
+        setStale(true)
+        setError(result.message)
+        setErrorField(null)
+      } else {
         setError(result.message)
         setErrorField(result.field ?? null)
         focusField(result.field)
@@ -209,18 +235,33 @@ function CallbackOutcomeForm({
         )}
       </select>
       {!unsuccessful && (
-        <p
-          id={`${id}-feedback`}
-          role={error ? "alert" : "status"}
-          className={error ? "text-destructive" : "text-muted-foreground"}
-        >
-          {error ??
-            (pending
-              ? "Saving status…"
-              : callback.lifecycle_state === "open"
-                ? "Due and overdue states are calculated from the schedule."
-                : "Reopen the callback to make it actionable again.")}
-        </p>
+        <>
+          <p
+            id={`${id}-feedback`}
+            role={error ? "alert" : "status"}
+            className={error ? "text-destructive" : "text-muted-foreground"}
+          >
+            {error ??
+              (pending
+                ? "Saving status…"
+                : callback.lifecycle_state === "open"
+                  ? "Due and overdue states are calculated from the schedule."
+                  : "Reopen the callback to make it actionable again.")}
+          </p>
+          {stale && (
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={pending}
+                onClick={onRefresh}
+              >
+                Refresh latest
+              </Button>
+            </div>
+          )}
+        </>
       )}
       {unsuccessful && (
         <form
@@ -255,6 +296,7 @@ function CallbackOutcomeForm({
                       setAttemptAction(choice)
                       setError(null)
                       setErrorField(null)
+                      setStale(false)
                       if (choice === "reschedule")
                         setMinimum(nextScheduleMinute())
                     }}
@@ -272,26 +314,6 @@ function CallbackOutcomeForm({
                 </label>
               ))}
             </div>
-            <Field data-invalid={errorField === "note"}>
-              <FieldLabel htmlFor={`${id}-note`}>
-                Attempt note (optional)
-              </FieldLabel>
-              <Textarea
-                id={`${id}-note`}
-                name="note"
-                value={note}
-                maxLength={ATTEMPT_NOTE_MAX_LENGTH}
-                aria-invalid={errorField === "note"}
-                aria-describedby={
-                  errorField === "note" ? `${id}-feedback` : undefined
-                }
-                onChange={(event) => {
-                  setNote(event.target.value)
-                  setError(null)
-                  setErrorField(null)
-                }}
-              />
-            </Field>
             {attemptAction === "reschedule" && (
               <>
                 <Field data-invalid={errorField === "schedule_mode"}>
@@ -311,6 +333,7 @@ function CallbackOutcomeForm({
                         setMode(values[0])
                         setError(null)
                         setErrorField(null)
+                        setStale(false)
                       }
                     }}
                   >
@@ -339,6 +362,7 @@ function CallbackOutcomeForm({
                       onChange={() => {
                         setError(null)
                         setErrorField(null)
+                        setStale(false)
                       }}
                     />
                   </Field>
@@ -372,6 +396,7 @@ function CallbackOutcomeForm({
                               onChange={() => {
                                 setError(null)
                                 setErrorField(null)
+                                setStale(false)
                               }}
                             />
                           </Field>
@@ -382,14 +407,34 @@ function CallbackOutcomeForm({
                 )}
               </>
             )}
-            {error && <FieldError id={`${id}-feedback`}>{error}</FieldError>}
+            {stale ? (
+              <div className="flex flex-col gap-2">
+                <FieldError id={`${id}-feedback`}>{error}</FieldError>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={pending}
+                    onClick={onRefresh}
+                  >
+                    Refresh latest
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    Your entries are kept. Refresh, then try again.
+                  </span>
+                </div>
+              </div>
+            ) : (
+              error && <FieldError id={`${id}-feedback`}>{error}</FieldError>
+            )}
             <div className="flex justify-end">
               <Button type="submit" disabled={pending} className="min-w-36">
                 {pending
                   ? "Saving…"
                   : attemptAction === "close"
                     ? "Close callback"
-                    : "Record and reschedule"}
+                    : "Save and reschedule"}
               </Button>
             </div>
           </fieldset>
@@ -450,9 +495,9 @@ function DetailsContent({
           key={`${callback.id}-${callback.updated_at}`}
           callback={callback}
           onSaved={onStatusSaved}
+          onRefresh={onRetry}
         />
       </div>
-      <CallbackAttemptHistory attempts={result.attempts} />
     </>
   )
 }
@@ -530,6 +575,7 @@ export function CallbackDetailsDialog({
     try {
       const outcome = await deleteCallback(callbackId)
       if (outcome.status === "success") {
+        cancelCallbackNotifications(callbackId)
         setOpen(false)
         request.current++
         setResult(null)
@@ -588,7 +634,7 @@ export function CallbackDetailsDialog({
             </DialogTitle>
             <DialogDescription>
               {confirmDelete
-                ? "This permanently deletes the callback and any associated attempt history. This cannot be undone."
+                ? "This permanently deletes the callback. This cannot be undone."
                 : "Customer information and scheduled callback time."}
             </DialogDescription>
           </div>
